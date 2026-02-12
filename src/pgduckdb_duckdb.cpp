@@ -231,6 +231,19 @@ DuckDBManager::Reset() {
 	UnclaimBgwSessionHint();
 }
 
+/*
+ * Exported C accessor for the DuckDB database instance.
+ * Allows external PostgreSQL extensions (e.g. pg_ducklake_next) to access
+ * the DuckDB instance managed by pg_duckdb, for loading statically-linked
+ * DuckDB extensions via db->LoadStaticExtension<T>().
+ *
+ * Follows the same pattern as RegisterDuckdbTableAm in pgduckdb_table_am.cpp.
+ */
+extern "C" __attribute__((visibility("default"))) void *
+GetDuckDBDatabase(void) {
+	return &DuckDBManager::Get().GetDatabase();
+}
+
 int64
 GetSeqLastValue(const char *seq_name) {
 	Oid duckdb_namespace = get_namespace_oid("duckdb", false);
