@@ -89,7 +89,7 @@ ToString(char *value) {
 	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
 extern "C" {
-typedef void (*DuckDBLoadExtension)(void);
+typedef void (*DuckDBLoadExtension)(void *db, void *context);
 }
 static std::vector<DuckDBLoadExtension> load_extensions;
 
@@ -229,7 +229,7 @@ DuckDBManager::Initialize() {
 	}
 
 	for (auto extension : load_extensions) {
-		extension();
+		extension(database, &context);
 	}
 
 	if (duckdb_autoinstall_known_extensions) {
@@ -246,18 +246,6 @@ DuckDBManager::Reset() {
 	UnclaimBgwSessionHint();
 }
 
-/*
- * Exported C accessor for the DuckDB database instance.
- * Allows external PostgreSQL extensions (e.g. pg_ducklake_next) to access
- * the DuckDB instance managed by pg_duckdb, for loading statically-linked
- * DuckDB extensions via db->LoadStaticExtension<T>().
- *
- * Follows the same pattern as RegisterDuckdbTableAm in pgduckdb_table_am.cpp.
- */
-extern "C" __attribute__((visibility("default"))) void *
-GetDuckDBDatabase(void) {
-	return &DuckDBManager::Get().GetDatabase();
-}
 
 int64
 GetSeqLastValue(const char *seq_name) {
