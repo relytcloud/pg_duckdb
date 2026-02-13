@@ -619,7 +619,7 @@ pgduckdb_get_querydef(Query *query) {
  * the following patch that I (Jelte) submitted to Postgres in 2023:
  * https://www.postgresql.org/message-id/CAGECzQSqdDHO_s8=CPTb2+4eCLGUscdh=KjYGTunhvrwcC7ZSQ@mail.gmail.com
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_tabledef(Oid relation_oid) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgduckdb_relation_name(relation_oid);
@@ -649,6 +649,8 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 		// allowed
 	} else if (relation->rd_rel->relpersistence != RELPERSISTENCE_PERMANENT) {
 		elog(ERROR, "Only TEMP and non-UNLOGGED tables are supported in DuckDB");
+	} else if (strcmp(duckdb_table_am_name, "duckdb") != 0) {
+		// not a duckdb table, let them decide
 	} else if (relation->rd_rel->relowner != pgduckdb::MotherDuckPostgresUserOid()) {
 		elog(ERROR, "MotherDuck tables must be owned by the duckb.postgres_role");
 	}
@@ -792,7 +794,7 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 	/* close create table's outer parentheses */
 	appendStringInfoString(&buffer, ")");
 
-	if (!pgduckdb::IsDuckdbTableAm(relation->rd_tableam)) {
+	if (duckdb_table_am_name == nullptr) {
 		/* Shouldn't happen but seems good to check anyway */
 		elog(ERROR, "Only a table with the DuckDB can be stored in DuckDB, %d %d", relation->rd_rel->relam,
 		     pgduckdb::DuckdbTableAmOid());
