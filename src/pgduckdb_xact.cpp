@@ -15,6 +15,21 @@ namespace pgduckdb {
 static CommandId next_expected_command_id = FirstCommandId;
 static bool top_level_statement = true;
 
+/*
+ * Unsafe hook for external extensions to set next_expected_command_id.
+ *
+ * These allow extensions like pg_ducklake to temporarily suppress mixed-write
+ * detection for internal metadata operations (e.g., SPI writes to ducklake_*
+ * tables) that should not count as user-initiated Postgres writes.
+ *
+ * WARNING: Misuse can mask genuine mixed-write violations. Only use for
+ * operations that are logically part of a DuckDB transaction.
+ */
+extern "C" __attribute__((visibility("default"))) void
+DuckdbUnsafeSetNextExpectedCommandId(uint32_t command_id) {
+	next_expected_command_id = command_id;
+}
+
 namespace pg {
 
 static bool force_allow_writes;
