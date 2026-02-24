@@ -563,7 +563,7 @@ pgduckdb_db_and_schema_string(const char *postgres_schema_name, const char *duck
  * DuckDB for the specified Postgres OID. This includes the DuckDB database name
  * too.
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_relation_name(Oid relation_oid) {
 	HeapTuple tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relation_oid));
 	if (!HeapTupleIsValid(tp))
@@ -597,7 +597,7 @@ pgduckdb_relation_name(Oid relation_oid) {
  * use in get_target_list to determine if we're processing the outermost
  * targetlist or not.
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_querydef(Query *query) {
 	outermost_query = true;
 	auto save_nestlevel = NewGUCNestLevel();
