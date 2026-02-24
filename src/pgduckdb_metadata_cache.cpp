@@ -195,7 +195,12 @@ BuildDuckdbOnlyFunctions() {
 	                                "map_extract_value",
 	                                "map_from_entries",
 	                                "map_keys",
-	                                "map_values"};
+	                                "map_values",
+	                                /* pg_ducklake DuckDB-only functions */
+	                                "options"};
+
+	/* Also accept functions from pg_ducklake extension */
+	Oid ducklake_extension_oid = get_extension_oid("pg_ducklake", true);
 
 	for (uint32_t i = 0; i < lengthof(function_names); i++) {
 		CatCList *catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(function_names[i]));
@@ -203,7 +208,9 @@ BuildDuckdbOnlyFunctions() {
 		for (int j = 0; j < catlist->n_members; j++) {
 			HeapTuple tuple = &catlist->members[j]->tuple;
 			Form_pg_proc function = (Form_pg_proc)GETSTRUCT(tuple);
-			if (getExtensionOfObject(ProcedureRelationId, function->oid) != cache.extension_oid) {
+			Oid ext_oid = getExtensionOfObject(ProcedureRelationId, function->oid);
+			if (ext_oid != cache.extension_oid &&
+			    (!OidIsValid(ducklake_extension_oid) || ext_oid != ducklake_extension_oid)) {
 				continue;
 			}
 
