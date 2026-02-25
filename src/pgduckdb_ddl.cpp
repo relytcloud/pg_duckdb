@@ -5,6 +5,7 @@
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pg/string_utils.hpp"
 
 extern "C" {
@@ -644,7 +645,8 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 				return DuckdbHandleRenameViewPre(stmt);
 			}
 
-			if (pgduckdb::IsDuckdbTable(rel)) {
+			if (pgduckdb::IsDuckdbTable(rel) ||
+			    pgduckdb::DuckdbTableAmGetName(rel->rd_tableam) != nullptr) {
 				if (pgduckdb::top_level_duckdb_ddl_type != pgduckdb::DDLType::NONE) {
 					ereport(ERROR, (errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					                errmsg("Only one DuckDB %s can be renamed in a single statement",
@@ -685,7 +687,9 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 		 * afterwards. We currently only do this to get a better error message,
 		 * because we don't support REFERENCES anyway.
 		 */
-		if (pgduckdb::IsDuckdbTable(relation) && pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::NONE) {
+		if ((pgduckdb::IsDuckdbTable(relation) ||
+		     pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr) &&
+		    pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::NONE) {
 			pgduckdb::top_level_duckdb_ddl_type = pgduckdb::DDLType::ALTER_TABLE;
 			pgduckdb::ClaimCurrentCommandId();
 		}
@@ -1850,4 +1854,14 @@ DECLARE_PG_FUNCTION(duckdb_grant_trigger) {
 
 	PG_RETURN_NULL();
 }
+}
+
+/*
+ * Exported getter for top_level_duckdb_ddl_type, so external extensions
+ * (like pg_ducklake) can check if an ALTER TABLE is in progress.
+ * This is needed because pgduckdb uses -fvisibility=hidden for C++ symbols.
+ */
+extern "C" __attribute__((visibility("default"))) bool
+DuckdbIsAlterTableInProgress() {
+	return pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::ALTER_TABLE;
 }

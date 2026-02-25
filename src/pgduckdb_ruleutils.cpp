@@ -2,6 +2,7 @@
 #include "pgduckdb/pg/string_utils.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
+#include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pg/relations.hpp"
 #include "pgduckdb/pg/locale.hpp"
 
@@ -884,7 +885,7 @@ cookConstraint(ParseState *pstate, Node *raw_constraint, char *relname) {
 	return expr;
 }
 
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	if (rename_stmt->renameType != OBJECT_TABLE && rename_stmt->renameType != OBJECT_VIEW &&
 	    rename_stmt->renameType != OBJECT_COLUMN) {
@@ -892,10 +893,18 @@ pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	}
 
 	Relation relation = relation_open(relation_oid, AccessShareLock);
-	Assert(pgduckdb::IsDuckdbTable(relation) || pgduckdb::IsMotherDuckView(relation));
+	Assert(pgduckdb::IsDuckdbTable(relation) || pgduckdb::IsMotherDuckView(relation) ||
+	       pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr);
 
 	const char *postgres_schema_name = get_namespace_name_or_temp(relation->rd_rel->relnamespace);
-	const char *db_and_schema = pgduckdb_db_and_schema_string(postgres_schema_name, "duckdb");
+	const char *duckdb_table_am_name = "duckdb";
+	if (relation->rd_rel->relkind == RELKIND_RELATION) {
+		const char *table_am_name = pgduckdb::DuckdbTableAmGetName(relation->rd_tableam);
+		if (table_am_name != nullptr) {
+			duckdb_table_am_name = table_am_name;
+		}
+	}
+	const char *db_and_schema = pgduckdb_db_and_schema_string(postgres_schema_name, duckdb_table_am_name);
 	const char *old_table_name = psprintf("%s.%s", db_and_schema, quote_identifier(rename_stmt->relation->relname));
 
 	const char *relation_type = "TABLE";
@@ -926,7 +935,7 @@ pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
  *
  * TODO: Add support indexes
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgduckdb_relation_name(relation_oid);
