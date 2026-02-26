@@ -11701,6 +11701,8 @@ get_rte_alias(RangeTblEntry *rte, int varno, bool use_as,
 		 */
 		if (strcmp(refname, get_relation_name(rte->relid)) != 0)
 			printalias = true;
+		else if (pgduckdb_needs_forced_alias(rte->relid))
+			printalias = true;
 	}
 	else if (rte->rtekind == RTE_FUNCTION)
 	{

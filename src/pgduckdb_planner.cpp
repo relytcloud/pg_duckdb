@@ -38,8 +38,25 @@ extern "C" {
 #include "pgduckdb/utility/cpp_wrapper.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 
+/*
+ * Hook for external extensions to process query trees before DuckDB preparation.
+ * Used by pg_ducklake to register foreign tables (ATTACH databases) before the
+ * query is converted to DuckDB SQL.
+ */
+typedef void (*DuckdbPrePrepareCallback)(const void *query);
+static std::vector<DuckdbPrePrepareCallback> pre_prepare_callbacks;
+
+extern "C" __attribute__((visibility("default"))) void
+RegisterDuckdbPrePrepareCallback(DuckdbPrePrepareCallback callback) {
+	pre_prepare_callbacks.push_back(callback);
+}
+
 duckdb::unique_ptr<duckdb::PreparedStatement>
 DuckdbPrepare(const Query *query, const char *explain_prefix) {
+	/* Invoke pre-prepare callbacks (e.g., register foreign tables) */
+	for (auto &cb : pre_prepare_callbacks) {
+		cb(query);
+	}
 	Query *copied_query = (Query *)copyObjectImpl(query);
 	const char *query_string = pgduckdb_get_querydef(copied_query);
 

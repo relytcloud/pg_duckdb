@@ -45,6 +45,32 @@ extern "C" {
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
 
+/*
+ * Hook for external extensions to provide custom DuckDB relation names for
+ * relation OIDs that pg_duckdb doesn't natively handle (e.g., foreign tables).
+ * If a callback returns non-NULL, that name is used instead of the default.
+ */
+typedef char *(*DuckdbRelationNameCallback)(Oid relid);
+static std::vector<DuckdbRelationNameCallback> relation_name_callbacks;
+
+extern "C" __attribute__((visibility("default"))) void
+RegisterDuckdbRelationNameCallback(DuckdbRelationNameCallback callback) {
+	relation_name_callbacks.push_back(callback);
+}
+
+/*
+ * Hook for external extensions to force alias printing for certain relations.
+ * Used by pg_ducklake for foreign tables whose DuckDB name differs from the
+ * PostgreSQL table name.
+ */
+typedef bool (*DuckdbForcedAliasCheck)(Oid relid);
+static std::vector<DuckdbForcedAliasCheck> forced_alias_checks;
+
+extern "C" __attribute__((visibility("default"))) void
+RegisterDuckdbForcedAliasCheck(DuckdbForcedAliasCheck callback) {
+	forced_alias_checks.push_back(callback);
+}
+
 extern "C" {
 bool outermost_query = true;
 
@@ -560,12 +586,32 @@ pgduckdb_db_and_schema_string(const char *postgres_schema_name, const char *duck
 }
 
 /*
+ * pgduckdb_needs_forced_alias - check if a relation needs forced alias printing.
+ * Returns true if any registered callback indicates the relation needs an alias.
+ */
+bool
+pgduckdb_needs_forced_alias(Oid relid) {
+	for (auto &cb : forced_alias_checks) {
+		if (cb(relid))
+			return true;
+	}
+	return false;
+}
+
+/*
  * generate_relation_name computes the fully qualified name of the relation in
  * DuckDB for the specified Postgres OID. This includes the DuckDB database name
  * too.
  */
 extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_relation_name(Oid relation_oid) {
+	/* Check external callbacks first (e.g., foreign tables from pg_ducklake) */
+	for (auto &cb : relation_name_callbacks) {
+		char *name = cb(relation_oid);
+		if (name)
+			return name;
+	}
+
 	HeapTuple tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relation_oid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relation_oid);

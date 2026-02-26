@@ -43,6 +43,20 @@ static ExecutorFinish_hook_type prev_executor_finish_hook = NULL;
 static ExplainOneQuery_hook_type prev_explain_one_query_hook = NULL;
 static emit_log_hook_type prev_emit_log_hook = NULL;
 
+/*
+ * Hook for external extensions (like pg_ducklake) to register additional
+ * relation types as "DuckDB-eligible". When any registered callback returns
+ * true for a relid, that relation is treated like a DuckDB table for query
+ * routing purposes.
+ */
+typedef bool (*DuckdbExternalTableCheck)(Oid relid);
+static std::vector<DuckdbExternalTableCheck> external_table_checks;
+
+extern "C" __attribute__((visibility("default"))) void
+RegisterDuckdbExternalTableCheck(DuckdbExternalTableCheck callback) {
+	external_table_checks.push_back(callback);
+}
+
 static bool
 ContainsCatalogTable(List *rtes) {
 	foreach_node(RangeTblEntry, rte, rtes) {
@@ -67,7 +81,13 @@ ContainsCatalogTable(List *rtes) {
 
 static bool
 IsDuckdbTable(Oid relid) {
-	return pgduckdb::DuckdbTableAmGetName(relid) != nullptr;
+	if (pgduckdb::DuckdbTableAmGetName(relid) != nullptr)
+		return true;
+	for (auto &cb : external_table_checks) {
+		if (cb(relid))
+			return true;
+	}
+	return false;
 }
 
 static bool

@@ -1640,6 +1640,25 @@ GetPostgresDuckDBTypemod(const duckdb::LogicalType &type) {
 	}
 }
 
+} // namespace pgduckdb
+
+/*
+ * C-linkage wrappers for type mapping functions.
+ * Used by external extensions (e.g., pg_ducklake) that need DuckDB→PostgreSQL
+ * type conversion but can't access pgduckdb:: namespace symbols directly.
+ */
+extern "C" __attribute__((visibility("default"))) Oid
+DuckdbLogicalTypeToPostgresOid(const void *logical_type, bool throw_error) {
+	return pgduckdb::GetPostgresDuckDBType(*(const duckdb::LogicalType *)logical_type, throw_error);
+}
+
+extern "C" __attribute__((visibility("default"))) int32_t
+DuckdbLogicalTypeToPostgresTypemod(const void *logical_type) {
+	return pgduckdb::GetPostgresDuckDBTypemod(*(const duckdb::LogicalType *)logical_type);
+}
+
+namespace pgduckdb {
+
 template <class T>
 static void
 Append(duckdb::Vector &result, T value, idx_t offset) {
