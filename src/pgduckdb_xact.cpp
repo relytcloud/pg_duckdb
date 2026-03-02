@@ -30,6 +30,13 @@ DuckdbUnsafeSetNextExpectedCommandId(uint32_t command_id) {
 	next_expected_command_id = command_id;
 }
 
+static bool allow_subtransaction = false;
+
+extern "C" __attribute__((visibility("default"))) void
+DuckdbAllowSubtransaction(bool allow) {
+	allow_subtransaction = allow;
+}
+
 namespace pg {
 
 static bool force_allow_writes;
@@ -328,7 +335,7 @@ DuckdbSubXactCallback_Cpp(SubXactEvent event) {
 		return;
 	}
 
-	if (event == SUBXACT_EVENT_START_SUB) {
+	if (event == SUBXACT_EVENT_START_SUB && !allow_subtransaction) {
 		throw duckdb::NotImplementedException("SAVEPOINT is not supported in DuckDB");
 	}
 }
