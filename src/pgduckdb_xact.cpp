@@ -6,9 +6,20 @@
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_utils.hpp"
 #include "pgduckdb/pgduckdb_background_worker.hpp"
+#include "pgduckdb/pgduckdb_process_lock.hpp"
 
 #include "pgduckdb/pg/transactions.hpp"
 #include "pgduckdb/utility/cpp_wrapper.hpp"
+
+extern "C" __attribute__((visibility("default"))) void
+DuckdbLockGlobalProcess(void) {
+	pgduckdb::GlobalProcessLock::GetLock().lock();
+}
+
+extern "C" __attribute__((visibility("default"))) void
+DuckdbUnlockGlobalProcess(void) {
+	pgduckdb::GlobalProcessLock::GetLock().unlock();
+}
 
 namespace pgduckdb {
 
