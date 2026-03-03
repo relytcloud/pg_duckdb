@@ -920,7 +920,37 @@ DuckdbHandleViewStmtPre(Node *parsetree, PlannedStmt *pstmt, const char *query_s
 	}
 
 	if (!pgduckdb::NeedsToBeMotherDuckView(stmt, schema_name)) {
-		// Let Postgres handle this view
+		/*
+		 * For views over queries that require DuckDB execution (e.g.,
+		 * duckdb_only_functions like read_parquet, time_travel), expand
+		 * duckdb.row columns to proper PostgreSQL types so that
+		 * pg_attribute shows real column names and types.
+		 *
+		 * Skip the expensive parse_analyze when pg_duckdb has no registered
+		 * functions/tables — pure-Postgres views need no rewriting.
+		 */
+		if (!pgduckdb::IsExtensionRegistered()) {
+			return false;
+		}
+		RawStmt *rawstmt = makeNode(RawStmt);
+		rawstmt->stmt = stmt->query;
+		rawstmt->stmt_location = pstmt->stmt_location;
+		rawstmt->stmt_len = pstmt->stmt_len;
+#if PG_VERSION_NUM >= 150000
+		Query *viewParse = parse_analyze_fixedparams(rawstmt, query_string, NULL, 0, NULL);
+#else
+		Query *viewParse = parse_analyze(rawstmt, query_string, NULL, 0, NULL);
+#endif
+		if (IsA(viewParse, Query) && viewParse->commandType == CMD_SELECT &&
+		    pgduckdb::NeedsDuckdbExecution(viewParse)) {
+			char *duckdb_query_string = pgduckdb_get_querydef((Query *)copyObjectImpl(viewParse));
+			char *function_call = psprintf("duckdb.query(%s)", quote_literal_cstr(duckdb_query_string));
+			RawStmt *wrapped_query = EntrenchColumnsFromCall(viewParse, function_call, &query_string);
+			MemoryContext query_context = GetMemoryChunkContext(stmt->query);
+			MemoryContext oldcontext = MemoryContextSwitchTo(query_context);
+			stmt->query = (Node *)copyObjectImpl(wrapped_query->stmt);
+			MemoryContextSwitchTo(oldcontext);
+		}
 		return false;
 	}
 

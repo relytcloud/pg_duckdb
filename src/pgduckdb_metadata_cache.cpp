@@ -197,7 +197,8 @@ BuildDuckdbOnlyFunctions() {
 	                                "map_keys",
 	                                "map_values",
 	                                /* pg_ducklake DuckDB-only functions */
-	                                "options"};
+	                                "options",
+	                                "time_travel"};
 
 	/* Also accept functions from pg_ducklake extension */
 	Oid ducklake_extension_oid = get_extension_oid("pg_ducklake", true);
