@@ -99,6 +99,11 @@ RegisterDuckdbLoadExtension(DuckDBLoadExtension extension) {
 	return true;
 }
 
+extern "C" __attribute__((visibility("default"))) bool
+DuckdbIsInitialized() {
+	return pgduckdb::DuckDBManager::IsInitialized();
+}
+
 void
 DuckDBManager::Initialize() {
 	elog(DEBUG2, "(PGDuckDB/DuckDBManager) Creating DuckDB instance");
