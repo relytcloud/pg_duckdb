@@ -1543,7 +1543,7 @@ CheckForUnsupportedPostgresType(duckdb::LogicalType type) {
 	}
 }
 
-Oid
+__attribute__((visibility("default"))) Oid
 GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 	CheckForUnsupportedPostgresType(type);
 	switch (type.id()) {
@@ -1627,7 +1627,7 @@ GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 	}
 }
 
-int32
+__attribute__((visibility("default"))) int32
 GetPostgresDuckDBTypemod(const duckdb::LogicalType &type) {
 	switch (type.id()) {
 	case duckdb::LogicalTypeId::DECIMAL: {

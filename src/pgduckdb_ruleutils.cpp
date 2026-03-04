@@ -45,6 +45,14 @@ extern "C" {
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
 
+typedef char *(*DuckdbRelationNameCallbackFn)(Oid relid);
+static std::vector<DuckdbRelationNameCallbackFn> relation_name_callbacks;
+
+extern "C" __attribute__((visibility("default"))) void
+RegisterDuckdbRelationNameCallback(DuckdbRelationNameCallbackFn callback) {
+	relation_name_callbacks.push_back(callback);
+}
+
 extern "C" {
 bool outermost_query = true;
 
@@ -566,6 +574,12 @@ pgduckdb_db_and_schema_string(const char *postgres_schema_name, const char *duck
  */
 extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_relation_name(Oid relation_oid) {
+	for (auto &callback : relation_name_callbacks) {
+		char *name = callback(relation_oid);
+		if (name)
+			return name;
+	}
+
 	HeapTuple tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relation_oid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relation_oid);

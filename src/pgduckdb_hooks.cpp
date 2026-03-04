@@ -43,6 +43,15 @@ static ExecutorFinish_hook_type prev_executor_finish_hook = NULL;
 static ExplainOneQuery_hook_type prev_explain_one_query_hook = NULL;
 static emit_log_hook_type prev_emit_log_hook = NULL;
 
+typedef bool (*DuckdbExternalTableCheckFn)(Oid relid);
+static std::vector<DuckdbExternalTableCheckFn> external_table_checks;
+
+extern "C" __attribute__((visibility("default"))) bool
+RegisterDuckdbExternalTableCheck(DuckdbExternalTableCheckFn callback) {
+	external_table_checks.push_back(callback);
+	return true;
+}
+
 static bool
 ContainsCatalogTable(List *rtes) {
 	foreach_node(RangeTblEntry, rte, rtes) {
@@ -67,7 +76,13 @@ ContainsCatalogTable(List *rtes) {
 
 static bool
 IsDuckdbTable(Oid relid) {
-	return pgduckdb::DuckdbTableAmGetName(relid) != nullptr;
+	if (pgduckdb::DuckdbTableAmGetName(relid) != nullptr)
+		return true;
+	for (auto &check : external_table_checks) {
+		if (check(relid))
+			return true;
+	}
+	return false;
 }
 
 static bool
