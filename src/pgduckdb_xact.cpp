@@ -11,20 +11,21 @@
 #include "pgduckdb/pg/transactions.hpp"
 #include "pgduckdb/utility/cpp_wrapper.hpp"
 
-extern "C" __attribute__((visibility("default"))) void
-DuckdbLockGlobalProcess(void) {
-	pgduckdb::GlobalProcessLock::GetLock().lock();
-}
-
-extern "C" __attribute__((visibility("default"))) void
-DuckdbUnlockGlobalProcess(void) {
-	pgduckdb::GlobalProcessLock::GetLock().unlock();
-}
-
 namespace pgduckdb {
+
+__attribute__((visibility("default"))) void
+DuckdbLockGlobalProcess(void) {
+	GlobalProcessLock::GetLock().lock();
+}
+
+__attribute__((visibility("default"))) void
+DuckdbUnlockGlobalProcess(void) {
+	GlobalProcessLock::GetLock().unlock();
+}
 
 static CommandId next_expected_command_id = FirstCommandId;
 static bool top_level_statement = true;
+static bool allow_subtransaction = false;
 
 /*
  * Unsafe hook for external extensions to set next_expected_command_id.
@@ -36,14 +37,12 @@ static bool top_level_statement = true;
  * WARNING: Misuse can mask genuine mixed-write violations. Only use for
  * operations that are logically part of a DuckDB transaction.
  */
-extern "C" __attribute__((visibility("default"))) void
+__attribute__((visibility("default"))) void
 DuckdbUnsafeSetNextExpectedCommandId(uint32_t command_id) {
 	next_expected_command_id = command_id;
 }
 
-static bool allow_subtransaction = false;
-
-extern "C" __attribute__((visibility("default"))) void
+__attribute__((visibility("default"))) void
 DuckdbAllowSubtransaction(bool allow) {
 	allow_subtransaction = allow;
 }

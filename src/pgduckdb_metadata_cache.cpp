@@ -33,7 +33,20 @@ extern "C" {
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 
+static std::vector<const char *> external_extension_names;
+static std::vector<const char *> external_duckdb_only_function_names;
+
 namespace pgduckdb {
+
+__attribute__((visibility("default"))) void
+RegisterDuckdbOnlyExtension(const char *extension_name) {
+	external_extension_names.push_back(extension_name);
+}
+
+__attribute__((visibility("default"))) void
+RegisterDuckdbOnlyFunction(const char *function_name) {
+	external_duckdb_only_function_names.push_back(function_name);
+}
 struct {
 	/*
 	 * Does the cache contain valid data, i.e. is it initialized? Or is it
@@ -195,24 +208,35 @@ BuildDuckdbOnlyFunctions() {
 	                                "map_extract_value",
 	                                "map_from_entries",
 	                                "map_keys",
-	                                "map_values",
-	                                /* pg_ducklake DuckDB-only functions */
-	                                "options",
-	                                "time_travel"};
+	                                "map_values"};
 
-	/* Also accept functions from pg_ducklake extension */
-	Oid ducklake_extension_oid = get_extension_oid("pg_ducklake", true);
+	/* Collect OIDs of externally registered extensions */
+	std::vector<Oid> external_ext_oids;
+	for (auto ext_name : external_extension_names) {
+		Oid ext_oid = get_extension_oid(ext_name, true);
+		if (OidIsValid(ext_oid)) {
+			external_ext_oids.push_back(ext_oid);
+		}
+	}
 
-	for (uint32_t i = 0; i < lengthof(function_names); i++) {
-		CatCList *catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(function_names[i]));
+	auto add_functions_by_name = [&](const char *func_name) {
+		CatCList *catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(func_name));
 
 		for (int j = 0; j < catlist->n_members; j++) {
 			HeapTuple tuple = &catlist->members[j]->tuple;
 			Form_pg_proc function = (Form_pg_proc)GETSTRUCT(tuple);
 			Oid ext_oid = getExtensionOfObject(ProcedureRelationId, function->oid);
-			if (ext_oid != cache.extension_oid &&
-			    (!OidIsValid(ducklake_extension_oid) || ext_oid != ducklake_extension_oid)) {
-				continue;
+			if (ext_oid != cache.extension_oid) {
+				bool found = false;
+				for (auto &registered_oid : external_ext_oids) {
+					if (ext_oid == registered_oid) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					continue;
+				}
 			}
 
 			/* The cache needs to outlive the current transaction so store the list in TopMemoryContext */
@@ -222,6 +246,14 @@ BuildDuckdbOnlyFunctions() {
 		}
 
 		ReleaseSysCacheList(catlist);
+	};
+
+	for (uint32_t i = 0; i < lengthof(function_names); i++) {
+		add_functions_by_name(function_names[i]);
+	}
+
+	for (auto func_name : external_duckdb_only_function_names) {
+		add_functions_by_name(func_name);
 	}
 }
 

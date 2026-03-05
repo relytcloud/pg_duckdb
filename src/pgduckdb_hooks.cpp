@@ -46,11 +46,13 @@ static emit_log_hook_type prev_emit_log_hook = NULL;
 typedef bool (*DuckdbExternalTableCheckFn)(Oid relid);
 static std::vector<DuckdbExternalTableCheckFn> external_table_checks;
 
-extern "C" __attribute__((visibility("default"))) bool
+namespace pgduckdb {
+__attribute__((visibility("default"))) bool
 RegisterDuckdbExternalTableCheck(DuckdbExternalTableCheckFn callback) {
 	external_table_checks.push_back(callback);
 	return true;
 }
+} // namespace pgduckdb
 
 static bool
 ContainsCatalogTable(List *rtes) {

@@ -48,10 +48,12 @@ extern "C" {
 typedef char *(*DuckdbRelationNameCallbackFn)(Oid relid);
 static std::vector<DuckdbRelationNameCallbackFn> relation_name_callbacks;
 
-extern "C" __attribute__((visibility("default"))) void
+namespace pgduckdb {
+__attribute__((visibility("default"))) void
 RegisterDuckdbRelationNameCallback(DuckdbRelationNameCallbackFn callback) {
 	relation_name_callbacks.push_back(callback);
 }
+} // namespace pgduckdb
 
 extern "C" {
 bool outermost_query = true;

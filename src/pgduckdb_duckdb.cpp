@@ -88,20 +88,18 @@ ToString(char *value) {
 	config.options.ddb_option_name = duckdb_##ddb_option_name;                                                         \
 	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
-extern "C" {
-typedef void (*DuckDBLoadExtension)(void *db, void *context);
-}
+typedef void (*DuckDBLoadExtension)(duckdb::DuckDB &db);
 static std::vector<DuckDBLoadExtension> load_extensions;
 
-extern "C" __attribute__((visibility("default"))) bool
+__attribute__((visibility("default"))) bool
 RegisterDuckdbLoadExtension(DuckDBLoadExtension extension) {
 	load_extensions.push_back(extension);
 	return true;
 }
 
-extern "C" __attribute__((visibility("default"))) bool
+__attribute__((visibility("default"))) bool
 DuckdbIsInitialized() {
-	return pgduckdb::DuckDBManager::IsInitialized();
+	return DuckDBManager::IsInitialized();
 }
 
 void
@@ -231,7 +229,7 @@ DuckDBManager::Initialize() {
 	}
 
 	for (auto extension : load_extensions) {
-		extension(database, &context);
+		extension(*database);
 	}
 
 	if (duckdb_autoinstall_known_extensions) {

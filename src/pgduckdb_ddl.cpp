@@ -1886,12 +1886,14 @@ DECLARE_PG_FUNCTION(duckdb_grant_trigger) {
 }
 }
 
+namespace pgduckdb {
 /*
  * Exported getter for top_level_duckdb_ddl_type, so external extensions
  * (like pg_ducklake) can check if an ALTER TABLE is in progress.
  * This is needed because pgduckdb uses -fvisibility=hidden for C++ symbols.
  */
-extern "C" __attribute__((visibility("default"))) bool
+__attribute__((visibility("default"))) bool
 DuckdbIsAlterTableInProgress() {
-	return pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::ALTER_TABLE;
+	return top_level_duckdb_ddl_type == DDLType::ALTER_TABLE;
 }
+} // namespace pgduckdb
