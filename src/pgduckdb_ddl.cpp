@@ -645,8 +645,7 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 				return DuckdbHandleRenameViewPre(stmt);
 			}
 
-			if (pgduckdb::IsDuckdbTable(rel) ||
-			    pgduckdb::DuckdbTableAmGetName(rel->rd_tableam) != nullptr) {
+			if (pgduckdb::IsDuckdbTable(rel) || pgduckdb::DuckdbTableAmGetName(rel->rd_tableam) != nullptr) {
 				if (pgduckdb::top_level_duckdb_ddl_type != pgduckdb::DDLType::NONE) {
 					ereport(ERROR, (errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					                errmsg("Only one DuckDB %s can be renamed in a single statement",
@@ -687,8 +686,7 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 		 * afterwards. We currently only do this to get a better error message,
 		 * because we don't support REFERENCES anyway.
 		 */
-		if ((pgduckdb::IsDuckdbTable(relation) ||
-		     pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr) &&
+		if ((pgduckdb::IsDuckdbTable(relation) || pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr) &&
 		    pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::NONE) {
 			pgduckdb::top_level_duckdb_ddl_type = pgduckdb::DDLType::ALTER_TABLE;
 			pgduckdb::ClaimCurrentCommandId();

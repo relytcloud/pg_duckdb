@@ -32,7 +32,8 @@ constexpr int64_t PGDUCKDB_MIN_TIMESTAMP_VALUE = -210866803200000000;
 
 void CheckForUnsupportedPostgresType(duckdb::LogicalType type);
 duckdb::LogicalType ConvertPostgresToDuckColumnType(Form_pg_attribute &attribute);
-__attribute__((visibility("default"))) Oid GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error = false);
+__attribute__((visibility("default"))) Oid GetPostgresDuckDBType(const duckdb::LogicalType &type,
+                                                                 bool throw_error = false);
 __attribute__((visibility("default"))) int32_t GetPostgresDuckDBTypemod(const duckdb::LogicalType &type);
 duckdb::Value ConvertPostgresParameterToDuckValue(Datum value, Oid postgres_type);
 void ConvertPostgresToDuckValue(Oid attr_type, Datum value, duckdb::Vector &result, uint64_t offset);

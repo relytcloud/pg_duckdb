@@ -246,7 +246,6 @@ DuckDBManager::Reset() {
 	UnclaimBgwSessionHint();
 }
 
-
 int64
 GetSeqLastValue(const char *seq_name) {
 	Oid duckdb_namespace = get_namespace_oid("duckdb", false);
