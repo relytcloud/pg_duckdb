@@ -33,7 +33,20 @@ extern "C" {
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 
+static std::vector<const char *> external_extension_names;
+static std::vector<const char *> external_duckdb_only_function_names;
+
 namespace pgduckdb {
+
+__attribute__((visibility("default"))) void
+RegisterDuckdbOnlyExtension(const char *extension_name) {
+	external_extension_names.push_back(extension_name);
+}
+
+__attribute__((visibility("default"))) void
+RegisterDuckdbOnlyFunction(const char *function_name) {
+	external_duckdb_only_function_names.push_back(function_name);
+}
 struct {
 	/*
 	 * Does the cache contain valid data, i.e. is it initialized? Or is it
@@ -197,14 +210,33 @@ BuildDuckdbOnlyFunctions() {
 	                                "map_keys",
 	                                "map_values"};
 
-	for (uint32_t i = 0; i < lengthof(function_names); i++) {
-		CatCList *catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(function_names[i]));
+	/* Collect OIDs of externally registered extensions */
+	std::vector<Oid> external_ext_oids;
+	for (auto ext_name : external_extension_names) {
+		Oid ext_oid = get_extension_oid(ext_name, true);
+		if (OidIsValid(ext_oid)) {
+			external_ext_oids.push_back(ext_oid);
+		}
+	}
+
+	auto add_functions_by_name = [&](const char *func_name) {
+		CatCList *catlist = SearchSysCacheList1(PROCNAMEARGSNSP, CStringGetDatum(func_name));
 
 		for (int j = 0; j < catlist->n_members; j++) {
 			HeapTuple tuple = &catlist->members[j]->tuple;
 			Form_pg_proc function = (Form_pg_proc)GETSTRUCT(tuple);
-			if (getExtensionOfObject(ProcedureRelationId, function->oid) != cache.extension_oid) {
-				continue;
+			Oid ext_oid = getExtensionOfObject(ProcedureRelationId, function->oid);
+			if (ext_oid != cache.extension_oid) {
+				bool found = false;
+				for (auto &registered_oid : external_ext_oids) {
+					if (ext_oid == registered_oid) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					continue;
+				}
 			}
 
 			/* The cache needs to outlive the current transaction so store the list in TopMemoryContext */
@@ -214,6 +246,14 @@ BuildDuckdbOnlyFunctions() {
 		}
 
 		ReleaseSysCacheList(catlist);
+	};
+
+	for (uint32_t i = 0; i < lengthof(function_names); i++) {
+		add_functions_by_name(function_names[i]);
+	}
+
+	for (auto func_name : external_duckdb_only_function_names) {
+		add_functions_by_name(func_name);
 	}
 }
 
@@ -446,6 +486,11 @@ RequireDuckdbExecution() {
 	if (!pgduckdb::IsDuckdbExecutionAllowed()) {
 		elog(ERROR, "DuckDB execution is not allowed because you have not been granted the duckdb.postgres_role");
 	}
+}
+
+__attribute__((visibility("default"))) bool
+DuckdbEnsureCacheValid() {
+	return IsExtensionRegistered();
 }
 
 } // namespace pgduckdb

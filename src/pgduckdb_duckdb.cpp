@@ -88,12 +88,23 @@ ToString(char *value) {
 	config.options.ddb_option_name = duckdb_##ddb_option_name;                                                         \
 	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
+typedef void (*DuckDBLoadExtension)(duckdb::DuckDB &db);
+static std::vector<DuckDBLoadExtension> load_extensions;
+
+__attribute__((visibility("default"))) bool
+RegisterDuckdbLoadExtension(DuckDBLoadExtension extension) {
+	load_extensions.push_back(extension);
+	return true;
+}
+
+__attribute__((visibility("default"))) bool
+DuckdbIsInitialized() {
+	return DuckDBManager::IsInitialized();
+}
+
 void
 DuckDBManager::Initialize() {
 	elog(DEBUG2, "(PGDuckDB/DuckDBManager) Creating DuckDB instance");
-
-	// Block signals before initializing DuckDB to ensure signal is handled by the Postgres main thread only
-	pgduckdb::ThreadSignalBlockGuard guard;
 
 	// Make sure directories provided in config exists
 	std::filesystem::create_directories(duckdb_temporary_directory);
@@ -215,6 +226,10 @@ DuckDBManager::Initialize() {
 			pgduckdb::DuckDBQueryOrThrow(context, "SET motherduck_background_catalog_refresh_inactivity_timeout=" +
 			                                          quoted_timeout);
 		}
+	}
+
+	for (auto extension : load_extensions) {
+		extension(*database);
 	}
 
 	if (duckdb_autoinstall_known_extensions) {

@@ -5,6 +5,7 @@
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pg/string_utils.hpp"
 
 extern "C" {
@@ -644,7 +645,7 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 				return DuckdbHandleRenameViewPre(stmt);
 			}
 
-			if (pgduckdb::IsDuckdbTable(rel)) {
+			if (pgduckdb::IsDuckdbTable(rel) || pgduckdb::DuckdbTableAmGetName(rel->rd_tableam) != nullptr) {
 				if (pgduckdb::top_level_duckdb_ddl_type != pgduckdb::DDLType::NONE) {
 					ereport(ERROR, (errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					                errmsg("Only one DuckDB %s can be renamed in a single statement",
@@ -685,7 +686,8 @@ DuckdbHandleDDLPre(PlannedStmt *pstmt, const char *query_string) {
 		 * afterwards. We currently only do this to get a better error message,
 		 * because we don't support REFERENCES anyway.
 		 */
-		if (pgduckdb::IsDuckdbTable(relation) && pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::NONE) {
+		if ((pgduckdb::IsDuckdbTable(relation) || pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr) &&
+		    pgduckdb::top_level_duckdb_ddl_type == pgduckdb::DDLType::NONE) {
 			pgduckdb::top_level_duckdb_ddl_type = pgduckdb::DDLType::ALTER_TABLE;
 			pgduckdb::ClaimCurrentCommandId();
 		}
@@ -916,7 +918,37 @@ DuckdbHandleViewStmtPre(Node *parsetree, PlannedStmt *pstmt, const char *query_s
 	}
 
 	if (!pgduckdb::NeedsToBeMotherDuckView(stmt, schema_name)) {
-		// Let Postgres handle this view
+		/*
+		 * For views over queries that require DuckDB execution (e.g.,
+		 * duckdb_only_functions like read_parquet, time_travel), expand
+		 * duckdb.row columns to proper PostgreSQL types so that
+		 * pg_attribute shows real column names and types.
+		 *
+		 * Skip the expensive parse_analyze when pg_duckdb has no registered
+		 * functions/tables — pure-Postgres views need no rewriting.
+		 */
+		if (!pgduckdb::IsExtensionRegistered()) {
+			return false;
+		}
+		RawStmt *rawstmt = makeNode(RawStmt);
+		rawstmt->stmt = stmt->query;
+		rawstmt->stmt_location = pstmt->stmt_location;
+		rawstmt->stmt_len = pstmt->stmt_len;
+#if PG_VERSION_NUM >= 150000
+		Query *viewParse = parse_analyze_fixedparams(rawstmt, query_string, NULL, 0, NULL);
+#else
+		Query *viewParse = parse_analyze(rawstmt, query_string, NULL, 0, NULL);
+#endif
+		if (IsA(viewParse, Query) && viewParse->commandType == CMD_SELECT &&
+		    pgduckdb::NeedsDuckdbExecution(viewParse)) {
+			char *duckdb_query_string = pgduckdb_get_querydef((Query *)copyObjectImpl(viewParse));
+			char *function_call = psprintf("duckdb.query(%s)", quote_literal_cstr(duckdb_query_string));
+			RawStmt *wrapped_query = EntrenchColumnsFromCall(viewParse, function_call, &query_string);
+			MemoryContext query_context = GetMemoryChunkContext(stmt->query);
+			MemoryContext oldcontext = MemoryContextSwitchTo(query_context);
+			stmt->query = (Node *)copyObjectImpl(wrapped_query->stmt);
+			MemoryContextSwitchTo(oldcontext);
+		}
 		return false;
 	}
 
@@ -1851,3 +1883,15 @@ DECLARE_PG_FUNCTION(duckdb_grant_trigger) {
 	PG_RETURN_NULL();
 }
 }
+
+namespace pgduckdb {
+/*
+ * Exported getter for top_level_duckdb_ddl_type, so external extensions
+ * (like pg_ducklake) can check if an ALTER TABLE is in progress.
+ * This is needed because pgduckdb uses -fvisibility=hidden for C++ symbols.
+ */
+__attribute__((visibility("default"))) bool
+DuckdbIsAlterTableInProgress() {
+	return top_level_duckdb_ddl_type == DDLType::ALTER_TABLE;
+}
+} // namespace pgduckdb

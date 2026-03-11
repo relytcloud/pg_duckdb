@@ -2,6 +2,7 @@
 #include "pgduckdb/pg/string_utils.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
+#include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pg/relations.hpp"
 #include "pgduckdb/pg/locale.hpp"
 
@@ -43,6 +44,16 @@ extern "C" {
 #include "pgduckdb/pgduckdb_duckdb.hpp"
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
+
+typedef char *(*DuckdbRelationNameCallbackFn)(Oid relid);
+static std::vector<DuckdbRelationNameCallbackFn> relation_name_callbacks;
+
+namespace pgduckdb {
+__attribute__((visibility("default"))) void
+RegisterDuckdbRelationNameCallback(DuckdbRelationNameCallbackFn callback) {
+	relation_name_callbacks.push_back(callback);
+}
+} // namespace pgduckdb
 
 extern "C" {
 bool outermost_query = true;
@@ -563,8 +574,14 @@ pgduckdb_db_and_schema_string(const char *postgres_schema_name, const char *duck
  * DuckDB for the specified Postgres OID. This includes the DuckDB database name
  * too.
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_relation_name(Oid relation_oid) {
+	for (auto &callback : relation_name_callbacks) {
+		char *name = callback(relation_oid);
+		if (name)
+			return name;
+	}
+
 	HeapTuple tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relation_oid));
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for relation %u", relation_oid);
@@ -597,7 +614,7 @@ pgduckdb_relation_name(Oid relation_oid) {
  * use in get_target_list to determine if we're processing the outermost
  * targetlist or not.
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_querydef(Query *query) {
 	outermost_query = true;
 	auto save_nestlevel = NewGUCNestLevel();
@@ -619,7 +636,7 @@ pgduckdb_get_querydef(Query *query) {
  * the following patch that I (Jelte) submitted to Postgres in 2023:
  * https://www.postgresql.org/message-id/CAGECzQSqdDHO_s8=CPTb2+4eCLGUscdh=KjYGTunhvrwcC7ZSQ@mail.gmail.com
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_tabledef(Oid relation_oid) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgduckdb_relation_name(relation_oid);
@@ -649,6 +666,8 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 		// allowed
 	} else if (relation->rd_rel->relpersistence != RELPERSISTENCE_PERMANENT) {
 		elog(ERROR, "Only TEMP and non-UNLOGGED tables are supported in DuckDB");
+	} else if (strcmp(duckdb_table_am_name, "duckdb") != 0) {
+		// not a duckdb table, let them decide
 	} else if (relation->rd_rel->relowner != pgduckdb::MotherDuckPostgresUserOid()) {
 		elog(ERROR, "MotherDuck tables must be owned by the duckb.postgres_role");
 	}
@@ -792,7 +811,7 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 	/* close create table's outer parentheses */
 	appendStringInfoString(&buffer, ")");
 
-	if (!pgduckdb::IsDuckdbTableAm(relation->rd_tableam)) {
+	if (duckdb_table_am_name == nullptr) {
 		/* Shouldn't happen but seems good to check anyway */
 		elog(ERROR, "Only a table with the DuckDB can be stored in DuckDB, %d %d", relation->rd_rel->relam,
 		     pgduckdb::DuckdbTableAmOid());
@@ -882,7 +901,7 @@ cookConstraint(ParseState *pstate, Node *raw_constraint, char *relname) {
 	return expr;
 }
 
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	if (rename_stmt->renameType != OBJECT_TABLE && rename_stmt->renameType != OBJECT_VIEW &&
 	    rename_stmt->renameType != OBJECT_COLUMN) {
@@ -890,10 +909,18 @@ pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	}
 
 	Relation relation = relation_open(relation_oid, AccessShareLock);
-	Assert(pgduckdb::IsDuckdbTable(relation) || pgduckdb::IsMotherDuckView(relation));
+	Assert(pgduckdb::IsDuckdbTable(relation) || pgduckdb::IsMotherDuckView(relation) ||
+	       pgduckdb::DuckdbTableAmGetName(relation->rd_tableam) != nullptr);
 
 	const char *postgres_schema_name = get_namespace_name_or_temp(relation->rd_rel->relnamespace);
-	const char *db_and_schema = pgduckdb_db_and_schema_string(postgres_schema_name, "duckdb");
+	const char *duckdb_table_am_name = "duckdb";
+	if (relation->rd_rel->relkind == RELKIND_RELATION) {
+		const char *table_am_name = pgduckdb::DuckdbTableAmGetName(relation->rd_tableam);
+		if (table_am_name != nullptr) {
+			duckdb_table_am_name = table_am_name;
+		}
+	}
+	const char *db_and_schema = pgduckdb_db_and_schema_string(postgres_schema_name, duckdb_table_am_name);
 	const char *old_table_name = psprintf("%s.%s", db_and_schema, quote_identifier(rename_stmt->relation->relname));
 
 	const char *relation_type = "TABLE";
@@ -924,7 +951,7 @@ pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
  *
  * TODO: Add support indexes
  */
-char *
+extern "C" __attribute__((visibility("default"))) char *
 pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgduckdb_relation_name(relation_oid);

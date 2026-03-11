@@ -4,3 +4,7 @@ duckdb_extension_load(httpfs
     GIT_URL https://github.com/duckdb/duckdb-httpfs
     GIT_TAG 9c7d34977b10346d0b4cbbde5df807d1dab0b2bf
 )
+duckdb_extension_load(postgres_scanner
+    GIT_URL https://github.com/relytcloud/duckdb-postgres
+    GIT_TAG 0684e8f70c948b824ac66c8c4b1450b4b1bcd33c
+)

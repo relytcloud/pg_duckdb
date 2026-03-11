@@ -18,6 +18,11 @@ DUCKDB_GEN ?= ninja
 DUCKDB_VERSION = v1.4.3
 # duckdb build tweaks
 DUCKDB_CMAKE_VARS = -DCXX_EXTRA=-fvisibility=default -DBUILD_SHELL=0 -DBUILD_PYTHON=0 -DBUILD_UNITTESTS=0
+# -Bsymbolic: required for postgres_scanner (used by DuckLake FDW) to avoid
+# ELF symbol conflict with PostgreSQL backend's pg_link_canary_is_frontend()
+ifeq ($(shell uname -s),Linux)
+DUCKDB_CMAKE_VARS += -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-Bsymbolic
+endif
 # set to 1 to disable asserts in DuckDB. This is particularly useful in combinition with MotherDuck.
 # When asserts are enabled the released motherduck extension will fail some of
 # those asserts. By disabling asserts it's possible to run a debug build of
@@ -81,6 +86,14 @@ override PG_CXXFLAGS += -std=c++17 ${DUCKDB_BUILD_CXX_FLAGS} ${COMPILER_FLAGS} -
 # declarations to be anywhere is even a good thing for those as we can keep our
 # changes to the vendored code in one place.
 override PG_CFLAGS += -Wno-declaration-after-statement
+
+# -Bsymbolic: required for postgres_scanner (used by DuckLake FDW) to avoid
+# ELF symbol conflict with PostgreSQL backend's pg_link_canary_is_frontend()
+ifeq ($(DUCKDB_BUILD), ReleaseStatic)
+ifeq ($(shell uname -s), Linux)
+SHLIB_LINK += -Wl,-Bsymbolic
+endif
+endif
 
 SHLIB_LINK += $(PG_DUCKDB_LINK_FLAGS)
 

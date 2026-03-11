@@ -6,14 +6,46 @@
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_utils.hpp"
 #include "pgduckdb/pgduckdb_background_worker.hpp"
+#include "pgduckdb/pgduckdb_process_lock.hpp"
 
 #include "pgduckdb/pg/transactions.hpp"
 #include "pgduckdb/utility/cpp_wrapper.hpp"
 
 namespace pgduckdb {
 
+__attribute__((visibility("default"))) void
+DuckdbLockGlobalProcess(void) {
+	GlobalProcessLock::GetLock().lock();
+}
+
+__attribute__((visibility("default"))) void
+DuckdbUnlockGlobalProcess(void) {
+	GlobalProcessLock::GetLock().unlock();
+}
+
 static CommandId next_expected_command_id = FirstCommandId;
 static bool top_level_statement = true;
+static bool allow_subtransaction = false;
+
+/*
+ * Unsafe hook for external extensions to set next_expected_command_id.
+ *
+ * These allow extensions like pg_ducklake to temporarily suppress mixed-write
+ * detection for internal metadata operations (e.g., SPI writes to ducklake_*
+ * tables) that should not count as user-initiated Postgres writes.
+ *
+ * WARNING: Misuse can mask genuine mixed-write violations. Only use for
+ * operations that are logically part of a DuckDB transaction.
+ */
+__attribute__((visibility("default"))) void
+DuckdbUnsafeSetNextExpectedCommandId(uint32_t command_id) {
+	next_expected_command_id = command_id;
+}
+
+__attribute__((visibility("default"))) void
+DuckdbAllowSubtransaction(bool allow) {
+	allow_subtransaction = allow;
+}
 
 namespace pg {
 
@@ -313,7 +345,7 @@ DuckdbSubXactCallback_Cpp(SubXactEvent event) {
 		return;
 	}
 
-	if (event == SUBXACT_EVENT_START_SUB) {
+	if (event == SUBXACT_EVENT_START_SUB && !allow_subtransaction) {
 		throw duckdb::NotImplementedException("SAVEPOINT is not supported in DuckDB");
 	}
 }
