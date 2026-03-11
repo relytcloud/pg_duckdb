@@ -143,6 +143,13 @@ char *duckdb_default_collation = strdup("");
 char *duckdb_azure_transport_option_type = strdup("");
 char *duckdb_custom_user_agent = strdup("");
 
+__attribute__((visibility("default"))) bool
+DuckdbSetForceExecution(bool value) {
+	bool old = duckdb_force_execution;
+	duckdb_force_execution = value;
+	return old;
+}
+
 void
 InitGUC() {
 	/* pg_duckdb specific GUCs */

@@ -488,4 +488,9 @@ RequireDuckdbExecution() {
 	}
 }
 
+__attribute__((visibility("default"))) bool
+DuckdbEnsureCacheValid() {
+	return IsExtensionRegistered();
+}
+
 } // namespace pgduckdb
