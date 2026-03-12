@@ -196,10 +196,6 @@ DuckDBManager::Initialize() {
 	auto &extension_manager = database->instance->GetExtensionManager();
 	auto extension_active_load = extension_manager.BeginLoad("pgduckdb");
 	D_ASSERT(extension_active_load);
-	{
-		duckdb::ExtensionLoader loader(*extension_active_load);
-		loader.RegisterFunction(PostgresScanTableFunction());
-	}
 	duckdb::ExtensionInstallInfo extension_install_info;
 	extension_active_load->FinishLoad(extension_install_info);
 
