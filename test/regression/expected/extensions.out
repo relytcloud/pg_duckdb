@@ -177,27 +177,29 @@ SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installe
  pgduckdb       | t      | f         | 
 (6 rows)
 
-SELECT duckdb.install_extension('prql', 'community');
-ERROR:  (PGDuckDB/install_extension_cpp) HTTP Error: Failed to download extension "prql" at URL "https://community-extensions.duckdb.org/v1.5.0/osx_arm64/prql.duckdb_extension.gz" (HTTP 404)
+SELECT duckdb.install_extension('lance', 'community');
+ install_extension
+-------------------
 
-Candidate extensions: "parquet", "mysql", "sqlite", "sqlite3", "mysql_scanner"
-For more info, visit https://duckdb.org/docs/stable/extensions/troubleshooting?version=v1.5.0&platform=osx_arm64&extension=prql
+(1 row)
+
 SELECT last_value FROM duckdb.extensions_table_seq;
- last_value 
+ last_value
 ------------
-         11
+         13
 (1 row)
 
 SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installed_from FROM duckdb_extensions() WHERE loaded and extension_name != 'jemalloc' $$);
- extension_name | loaded | installed | installed_from 
+ extension_name | loaded | installed | installed_from
 ----------------+--------+-----------+----------------
- core_functions | t      | t         | 
- httpfs         | t      | t         | 
+ core_functions | t      | t         |
+ httpfs         | t      | t         |
  icu            | t      | t         | core
- json           | t      | t         | 
- parquet        | t      | t         | 
- pgduckdb       | t      | f         | 
-(6 rows)
+ json           | t      | t         |
+ lance          | t      | t         | community
+ parquet        | t      | t         |
+ pgduckdb       | t      | f         |
+(7 rows)
 
 -- cleanup
 TRUNCATE duckdb.extensions;

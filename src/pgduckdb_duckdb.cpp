@@ -91,10 +91,6 @@ ToString(char *value) {
 	config.SetOptionByName(#ddb_option_name, duckdb::Value(duckdb_##ddb_option_name));                                 \
 	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
-#define SET_DUCKDB_CONFIG_OPTION(ddb_option_name)                                                                      \
-	config.options.ddb_option_name = duckdb_##ddb_option_name;                                                         \
-	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
-
 void
 DuckDBManager::Initialize() {
 	elog(DEBUG2, "(PGDuckDB/DuckDBManager) Creating DuckDB instance");
@@ -103,7 +99,7 @@ DuckDBManager::Initialize() {
 	pgduckdb::ThreadSignalBlockGuard guard;
 
 	// Make sure directories provided in config exists
-	std::filesystem::create_directories(duckdb_temporary_directory);
+	std::filesystem::create_directories(duckdb_temp_directory);
 	std::filesystem::create_directories(duckdb_extension_directory);
 
 	duckdb::DBConfig config;
@@ -125,7 +121,7 @@ DuckDBManager::Initialize() {
 	SET_DUCKDB_OPTION(allow_community_extensions);
 	SET_DUCKDB_OPTION(autoinstall_known_extensions);
 	SET_DUCKDB_OPTION(autoload_known_extensions);
-	SET_DUCKDB_CONFIG_OPTION(temporary_directory);
+	SET_DUCKDB_OPTION(temp_directory);
 	SET_DUCKDB_OPTION(extension_directory);
 
 	if (duckdb_maximum_memory > 0) {

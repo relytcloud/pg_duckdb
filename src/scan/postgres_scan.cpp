@@ -538,12 +538,18 @@ PostgresScanTableFunction::PostgresScanBind(duckdb::ClientContext &, duckdb::Tab
 	auto card = input.named_parameters.at("cardinality").GetValue<uint64_t>();
 	auto snap = input.named_parameters.at("snapshot").GetPointer();
 	auto rel = PostgresTable::OpenRelation(static_cast<Oid>(relid));
-	auto tupleDesc = RelationGetDescr(rel);
-	auto n = GetTupleDescNatts(tupleDesc);
-	for (int i = 0; i < n; i++) {
-		Form_pg_attribute attr = GetAttr(tupleDesc, i);
-		names.push_back(duckdb::string(GetAttName(attr)));
-		return_types.push_back(ConvertPostgresToDuckColumnType(attr));
+	try {
+		auto tupleDesc = RelationGetDescr(rel);
+		auto n = GetTupleDescNatts(tupleDesc);
+		for (int i = 0; i < n; i++) {
+			Form_pg_attribute attr = GetAttr(tupleDesc, i);
+			names.push_back(duckdb::string(GetAttName(attr)));
+			return_types.push_back(ConvertPostgresToDuckColumnType(attr));
+		}
+	} catch (...) {
+		std::lock_guard<std::recursive_mutex> lock(GlobalProcessLock::GetLock());
+		CloseRelation(rel);
+		throw;
 	}
 	return duckdb::make_uniq<PostgresScanFunctionData>(rel, card, reinterpret_cast<Snapshot>(snap), true);
 }
@@ -555,6 +561,7 @@ PostgresScanTableFunction::PostgresScanSerialize(duckdb::Serializer &serializer,
 	auto &data = bind_data->Cast<PostgresScanFunctionData>();
 	serializer.WriteProperty(100, "relid", static_cast<uint32_t>(GetRelationOid(data.rel)));
 	serializer.WriteProperty(101, "cardinality", data.cardinality);
+	// Snapshot is serialized as a raw pointer — only safe for in-process round-trips within a single transaction.
 	serializer.WriteProperty(102, "snapshot", static_cast<uint64_t>(reinterpret_cast<uintptr_t>(data.snapshot)));
 }
 
@@ -564,8 +571,14 @@ PostgresScanTableFunction::PostgresScanDeserialize(duckdb::Deserializer &deseria
 	auto card = deserializer.ReadProperty<uint64_t>(101, "cardinality");
 	auto snap = deserializer.ReadProperty<uint64_t>(102, "snapshot");
 	auto rel = PostgresTable::OpenRelation(static_cast<Oid>(relid));
-	return duckdb::make_uniq<PostgresScanFunctionData>(rel, card, reinterpret_cast<Snapshot>(static_cast<uintptr_t>(snap)),
-	                                                    true);
+	try {
+		return duckdb::make_uniq<PostgresScanFunctionData>(rel, card,
+		                                                    reinterpret_cast<Snapshot>(static_cast<uintptr_t>(snap)), true);
+	} catch (...) {
+		std::lock_guard<std::recursive_mutex> lock(GlobalProcessLock::GetLock());
+		CloseRelation(rel);
+		throw;
+	}
 }
 
 duckdb::InsertionOrderPreservingMap<duckdb::string>

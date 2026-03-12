@@ -22,7 +22,7 @@ extern int duckdb_max_workers_per_postgres_scan;
 extern char *duckdb_postgres_role;
 extern char *duckdb_motherduck_session_hint;
 extern bool duckdb_force_motherduck_views;
-extern char *duckdb_temporary_directory;
+extern char *duckdb_temp_directory;
 extern char *duckdb_extension_directory;
 extern char *duckdb_max_temp_directory_size;
 extern char *duckdb_default_collation;

@@ -136,7 +136,7 @@ bool duckdb_allow_community_extensions = false;
 bool duckdb_allow_unsigned_extensions = false;
 bool duckdb_autoinstall_known_extensions = true;
 bool duckdb_autoload_known_extensions = true;
-char *duckdb_temporary_directory = MakeDirName("temp");
+char *duckdb_temp_directory = MakeDirName("temp");
 char *duckdb_extension_directory = MakeDirName("extensions");
 char *duckdb_max_temp_directory_size = strdup("");
 char *duckdb_default_collation = strdup("");
@@ -210,7 +210,7 @@ InitGUC() {
 	DefineCustomDuckDBVariable(
 	    "duckdb.temporary_directory",
 	    "Set the directory to which DuckDB write temp files, alias for duckdb.temporary_directory",
-	    &duckdb_temporary_directory, PGC_SUSET);
+	    &duckdb_temp_directory, PGC_SUSET);
 
 	DefineCustomDuckDBVariable(
 	    "duckdb.max_temp_directory_size",
