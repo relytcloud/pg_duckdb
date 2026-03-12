@@ -128,7 +128,7 @@ char *duckdb_motherduck_session_hint = strdup("");
 char *duckdb_postgres_role = strdup("");
 bool duckdb_force_motherduck_views = false;
 
-int duckdb_maximum_threads = -1;
+int duckdb_threads = -1;
 int duckdb_maximum_memory = 4096; /* 4GB in MB */
 char *duckdb_disabled_filesystems = strdup("");
 bool duckdb_enable_external_access = true;
@@ -224,10 +224,10 @@ InitGUC() {
 	    &duckdb_extension_directory, PGC_SUSET);
 
 	DefineCustomDuckDBVariable("duckdb.threads", "Maximum number of DuckDB threads per Postgres backend.",
-	                           &duckdb_maximum_threads, -1, 1024, PGC_SUSET);
+	                           &duckdb_threads, -1, 1024, PGC_SUSET);
 	DefineCustomDuckDBVariable("duckdb.worker_threads",
 	                           "Maximum number of DuckDB threads per Postgres backend, alias for duckdb.threads",
-	                           &duckdb_maximum_threads, -1, 1024, PGC_SUSET);
+	                           &duckdb_threads, -1, 1024, PGC_SUSET);
 
 	DefineCustomDuckDBVariable("duckdb.default_collation",
 	                           "The default collation to use for DuckDB queries, e.g., 'en_us'",

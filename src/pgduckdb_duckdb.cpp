@@ -141,9 +141,8 @@ DuckDBManager::Initialize() {
 		elog(DEBUG2, "[PGDuckDB] Set DuckDB option: 'max_temp_directory_size'=%s", duckdb_max_temp_directory_size);
 	}
 
-	if (duckdb_maximum_threads > -1) {
-		config.SetOptionByName("threads", duckdb::Value(duckdb_maximum_threads));
-		elog(DEBUG2, "[PGDuckDB] Set DuckDB option: 'threads'=%s", ToString(duckdb_maximum_threads).c_str());
+	if (duckdb_threads > -1) {
+		SET_DUCKDB_OPTION(threads);
 	}
 
 	std::string connection_string;
