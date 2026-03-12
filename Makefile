@@ -51,7 +51,8 @@ else
 endif
 
 
-PG_DUCKDB_LINK_FLAGS += -Wl,-rpath,$(PG_LIB)/ -L$(DUCKDB_BUILD_DIR)/src -L$(PG_LIB) -lstdc++ -llz4
+LZ4_LIB_DIR ?= $(shell pkg-config --libs-only-L lz4 2>/dev/null || echo "-L/opt/homebrew/opt/lz4/lib")
+PG_DUCKDB_LINK_FLAGS += -Wl,-rpath,$(PG_LIB)/ -L$(DUCKDB_BUILD_DIR)/src -L$(PG_LIB) -lstdc++ $(LZ4_LIB_DIR) -llz4
 
 # Ensure -lstdc++fs is included for GCC 8 builds
 CXX ?= c++
