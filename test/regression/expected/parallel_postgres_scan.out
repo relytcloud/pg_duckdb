@@ -13,9 +13,12 @@ DROP TABLE tbl;
 CREATE TABLE tbl (id int, c jsonb, d text[]);
 INSERT INTO tbl SELECT i, jsonb_build_object('a', i), array_agg(i) FROM generate_series(1, 500000) i GROUP BY i;
 SELECT * FROM tbl ORDER BY id DESC LIMIT 3;
- id | c | d 
-----+---+---
-(0 rows)
+   id   |       c       |    d     
+--------+---------------+----------
+ 500000 | {"a": 500000} | {500000}
+ 499999 | {"a": 499999} | {499999}
+ 499998 | {"a": 499998} | {499998}
+(3 rows)
 
 CREATE TABLE tbl1 (id int, c jsonb, d text[]);
 INSERT INTO tbl1 SELECT i, jsonb_build_object('a', i), array_agg(i) FROM generate_series(1, 100000) i GROUP BY i;
