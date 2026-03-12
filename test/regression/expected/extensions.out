@@ -178,27 +178,27 @@ SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installe
 (6 rows)
 
 SELECT duckdb.install_extension('lance', 'community');
- install_extension
+ install_extension 
 -------------------
-
+ 
 (1 row)
 
 SELECT last_value FROM duckdb.extensions_table_seq;
- last_value
+ last_value 
 ------------
          13
 (1 row)
 
 SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installed_from FROM duckdb_extensions() WHERE loaded and extension_name != 'jemalloc' $$);
- extension_name | loaded | installed | installed_from
+ extension_name | loaded | installed | installed_from 
 ----------------+--------+-----------+----------------
- core_functions | t      | t         |
- httpfs         | t      | t         |
+ core_functions | t      | t         | 
+ httpfs         | t      | t         | 
  icu            | t      | t         | core
- json           | t      | t         |
+ json           | t      | t         | 
  lance          | t      | t         | community
- parquet        | t      | t         |
- pgduckdb       | t      | f         |
+ parquet        | t      | t         | 
+ pgduckdb       | t      | f         | 
 (7 rows)
 
 -- cleanup
