@@ -26,7 +26,12 @@ def test_community_extensions(pg: Postgres):
     # superuser.
     with pg.cur() as cur:
         cur.sql("SET duckdb.force_execution = false")
+        cur.sql("SET duckdb.allow_community_extensions = true")
         cur.sql("SELECT * FROM duckdb.raw_query($$ INSTALL quack FROM community; $$)")
+
+    with pg.cur() as cur:
+        cur.sql("SET duckdb.allow_community_extensions = false")
+        cur.sql("SET duckdb.force_execution = false")
         with pytest.raises(
             Exception,
             match="IO Error: Extension .* could not be loaded because its signature is either missing or invalid and unsigned extensions are disabled by configuration",
