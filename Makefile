@@ -15,7 +15,7 @@ OBJS += $(subst .c,.o, $(C_SRCS))
 # set to `make` to disable ninja
 DUCKDB_GEN ?= ninja
 # used to know what version of extensions to download
-DUCKDB_VERSION = v1.4.3
+DUCKDB_VERSION = v1.5.0
 # duckdb build tweaks
 DUCKDB_CMAKE_VARS = -DCXX_EXTRA=-fvisibility=default -DBUILD_SHELL=0 -DBUILD_PYTHON=0 -DBUILD_UNITTESTS=0
 # -Bsymbolic: required for postgres_scanner (used by DuckLake FDW) to avoid
