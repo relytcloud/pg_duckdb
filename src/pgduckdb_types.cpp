@@ -22,6 +22,7 @@ extern "C" {
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "access/tupdesc_details.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "common/int.h"
 #include "executor/tuptable.h"
@@ -41,6 +42,73 @@ extern "C" {
 #include "pgduckdb/pgduckdb_process_lock.hpp"
 
 namespace pgduckdb {
+
+/* Passthrough types: PG types that map directly to a DuckDB type by name.
+ * Used for types like VARIANT that have no native PG equivalent.
+ * Registered at _PG_init time (no catalog access); OID resolved lazily. */
+struct PassthroughTypeEntry {
+	std::string pg_schema;
+	std::string pg_type_name;
+	std::string duckdb_type_name;
+	duckdb::LogicalTypeId type_id;
+	Oid pg_oid;
+};
+
+static std::vector<PassthroughTypeEntry> passthrough_types;
+
+static void
+ResolvePassthroughOids() {
+	for (auto &entry : passthrough_types) {
+		if (OidIsValid(entry.pg_oid)) {
+			continue;
+		}
+		Oid nsp_oid = get_namespace_oid(entry.pg_schema.c_str(), true);
+		if (OidIsValid(nsp_oid)) {
+			entry.pg_oid = GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid,
+			                               CStringGetDatum(entry.pg_type_name.c_str()),
+			                               ObjectIdGetDatum(nsp_oid));
+		}
+	}
+}
+
+__attribute__((visibility("default"))) void
+RegisterPassthroughType(const char *pg_schema, const char *pg_type_name, const char *duckdb_type_name) {
+	auto type_id = duckdb::TransformStringToLogicalTypeId(duckdb_type_name);
+	passthrough_types.push_back({pg_schema, pg_type_name, duckdb_type_name, type_id, InvalidOid});
+}
+
+__attribute__((visibility("default"))) const char *
+GetPassthroughTypeName(Oid pg_type_oid) {
+	ResolvePassthroughOids();
+	for (auto &entry : passthrough_types) {
+		if (entry.pg_oid == pg_type_oid) {
+			return entry.duckdb_type_name.c_str();
+		}
+	}
+	return nullptr;
+}
+
+static duckdb::LogicalTypeId
+GetPassthroughLogicalTypeId(Oid pg_type_oid) {
+	ResolvePassthroughOids();
+	for (auto &entry : passthrough_types) {
+		if (entry.pg_oid == pg_type_oid) {
+			return entry.type_id;
+		}
+	}
+	return duckdb::LogicalTypeId::INVALID;
+}
+
+static Oid
+GetPassthroughOid(const duckdb::LogicalType &type) {
+	ResolvePassthroughOids();
+	for (auto &entry : passthrough_types) {
+		if (entry.type_id == type.id()) {
+			return entry.pg_oid;
+		}
+	}
+	return InvalidOid;
+}
 
 NumericVar FromNumeric(Numeric num);
 
@@ -1266,6 +1334,9 @@ ConvertDuckToPostgresValue(TupleTableSlot *slot, duckdb::Value &value, idx_t col
 		} else if (oid == pgduckdb::DuckdbMapArrayOid()) {
 			ConvertDuckToPostgresArray<MapArray>(slot, value, col);
 			return true;
+		} else if (pgduckdb::GetPassthroughTypeName(oid)) {
+			slot->tts_values[col] = ConvertToStringDatum(value);
+			return true;
 		}
 		elog(WARNING, "(PGDuckDB/ConvertDuckToPostgresValue) Unsuported pgduckdb type: %d", oid);
 		return false;
@@ -1398,7 +1469,11 @@ ConvertPostgresToBaseDuckColumnType(Form_pg_attribute &attribute) {
 	case BYTEAOID:
 	case BYTEAARRAYOID:
 		return duckdb::LogicalTypeId::BLOB;
-	default:
+	default: {
+		auto passthrough_id = pgduckdb::GetPassthroughLogicalTypeId(typoid);
+		if (passthrough_id != duckdb::LogicalTypeId::INVALID) {
+			return duckdb::LogicalType(passthrough_id);
+		}
 		if (typoid == pgduckdb::DuckdbUnionOid()) {
 			return duckdb::LogicalTypeId::UNION;
 		} else if (typoid == pgduckdb::DuckdbStructOid()) {
@@ -1413,6 +1488,7 @@ ConvertPostgresToBaseDuckColumnType(Form_pg_attribute &attribute) {
 			return duckdb::LogicalTypeId::MAP;
 		}
 		return CreateUnsupportedPostgresType("Oid=" + std::to_string(attribute->atttypid));
+	}
 	}
 }
 
@@ -1616,6 +1692,10 @@ GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 	case duckdb::LogicalTypeId::ENUM:
 		return VARCHAROID;
 	default: {
+		Oid passthrough_oid = pgduckdb::GetPassthroughOid(type);
+		if (OidIsValid(passthrough_oid)) {
+			return passthrough_oid;
+		}
 		if (throw_error) {
 			throw duckdb::NotImplementedException("Could not convert DuckDB type: " + type.ToString() +
 			                                      " to Postgres type");

@@ -42,4 +42,8 @@ void InsertTupleIntoChunk(duckdb::DataChunk &output, PostgresScanLocalState &sca
 void InsertTuplesIntoChunk(duckdb::DataChunk &output, PostgresScanLocalState &scan_local_state, TupleTableSlot **slots,
                            int num_slots);
 
+__attribute__((visibility("default"))) void RegisterPassthroughType(const char *pg_schema, const char *pg_type_name,
+                                                                    const char *duckdb_type_name);
+__attribute__((visibility("default"))) const char *GetPassthroughTypeName(Oid pg_type_oid);
+
 } // namespace pgduckdb
