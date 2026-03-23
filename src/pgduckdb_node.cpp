@@ -268,6 +268,25 @@ Duckdb_ExecCustomScan_Cpp(CustomScanState *node) {
 			ExecuteQuery(duckdb_scan_state);
 		}
 
+		/*
+		 * For DML without RETURNING, DuckDB returns a single row with
+		 * column "Count" (BIGINT) containing the number of affected rows.
+		 * Extract this count, propagate it to es_processed for the
+		 * completion tag, and return an empty slot so the executor does
+		 * not further increment es_processed.
+		 */
+		if (!already_executed &&
+		    duckdb_scan_state->query->commandType != CMD_SELECT &&
+		    duckdb_scan_state->query->returningList == NIL) {
+			auto chunk = duckdb_scan_state->query_results->Fetch();
+			if (chunk && chunk->size() > 0) {
+				int64_t count = chunk->GetValue(0, 0).GetValue<int64_t>();
+				duckdb_scan_state->css.ss.ps.state->es_processed = count;
+			}
+			ExecClearTuple(slot);
+			return slot;
+		}
+
 		if (duckdb_scan_state->fetch_next) {
 			duckdb_scan_state->current_data_chunk = duckdb_scan_state->query_results->Fetch();
 			duckdb_scan_state->current_row = 0;
