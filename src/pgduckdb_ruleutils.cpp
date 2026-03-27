@@ -106,6 +106,10 @@ pgduckdb_is_fake_type(Oid type_oid) {
 		return true;
 	}
 
+	if (pgduckdb::GetPassthroughTypeName(type_oid)) {
+		return true;
+	}
+
 	return false;
 }
 
@@ -709,7 +713,9 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 		auto duck_type = pgduckdb::ConvertPostgresToDuckColumnType(column);
 		pgduckdb::GetPostgresDuckDBType(duck_type, true);
 
-		const char *column_type_name = format_type_with_typemod(column->atttypid, column->atttypmod);
+		const char *passthrough_name = pgduckdb::GetPassthroughTypeName(column->atttypid);
+		const char *column_type_name = passthrough_name ? passthrough_name
+		                                                : format_type_with_typemod(column->atttypid, column->atttypmod);
 
 		if (first_column_printed) {
 			appendStringInfoString(&buffer, ", ");
@@ -984,7 +990,9 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 			ColumnDef *col = castNode(ColumnDef, cmd->def);
 			TupleDesc tupdesc = BuildDescForRelation(list_make1(col));
 			Form_pg_attribute attribute = TupleDescAttr(tupdesc, 0);
-			const char *column_fq_type = format_type_with_typemod(attribute->atttypid, attribute->atttypmod);
+			const char *add_passthrough = pgduckdb::GetPassthroughTypeName(attribute->atttypid);
+			const char *column_fq_type = add_passthrough ? add_passthrough
+			                                             : format_type_with_typemod(attribute->atttypid, attribute->atttypmod);
 
 			appendStringInfo(&buffer, "ADD COLUMN %s %s", quote_identifier(col->colname), column_fq_type);
 			foreach_node(Constraint, constraint, col->constraints) {
@@ -1042,7 +1050,9 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 			ColumnDef *col = castNode(ColumnDef, cmd->def);
 			TupleDesc tupdesc = BuildDescForRelation(list_make1(col));
 			Form_pg_attribute attribute = TupleDescAttr(tupdesc, 0);
-			const char *column_fq_type = format_type_with_typemod(attribute->atttypid, attribute->atttypmod);
+			const char *alter_passthrough = pgduckdb::GetPassthroughTypeName(attribute->atttypid);
+			const char *column_fq_type = alter_passthrough ? alter_passthrough
+			                                               : format_type_with_typemod(attribute->atttypid, attribute->atttypmod);
 			/* TODO: Disallow after SET DEFAULT/ADD CHECK CONSTRAINTin the same ALTER command */
 
 			appendStringInfo(&buffer, "ALTER COLUMN %s TYPE %s; ", quote_identifier(column_name), column_fq_type);
