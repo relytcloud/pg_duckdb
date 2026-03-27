@@ -183,16 +183,12 @@ SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installe
  postgres_scanner | t      | t         | 
 (7 rows)
 
-SELECT duckdb.install_extension('quack', 'community');
- install_extension 
--------------------
- 
-(1 row)
-
+-- TODO: re-enable when community extensions are published for v1.5.1
+-- SELECT duckdb.install_extension('quack', 'community');
 SELECT last_value FROM duckdb.extensions_table_seq;
  last_value 
 ------------
-         13
+         11
 (1 row)
 
 SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installed_from FROM duckdb_extensions() WHERE loaded and extension_name != 'jemalloc' $$);
@@ -205,8 +201,7 @@ SELECT * FROM duckdb.query($$ SELECT extension_name, loaded, installed, installe
  parquet          | t      | t         | 
  pgduckdb         | t      | f         | 
  postgres_scanner | t      | t         | 
- quack            | t      | t         | community
-(8 rows)
+(7 rows)
 
 -- cleanup
 TRUNCATE duckdb.extensions;
