@@ -1,12 +1,11 @@
-#include "pgduckdb/catalog/pgduckdb_schema.hpp"
-#include "pgduckdb/catalog/pgduckdb_table.hpp"
-#include "pgduckdb/catalog/pgduckdb_transaction.hpp"
+#include "pgddb/catalog/pgddb_schema.hpp"
+#include "pgddb/catalog/pgddb_table.hpp"
+#include "pgddb/catalog/pgddb_transaction.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
-
+namespace pgddb {
 PostgresSchema::PostgresSchema(duckdb::Catalog &_catalog, duckdb::CreateSchemaInfo &_info, Snapshot _snapshot)
     : SchemaCatalogEntry(_catalog, _info), snapshot(_snapshot), catalog(_catalog) {
 }
@@ -87,4 +86,4 @@ PostgresSchema::Alter(duckdb::CatalogTransaction, duckdb::AlterInfo &) {
 	throw duckdb::NotImplementedException("Alter not supported yet");
 }
 
-} // namespace pgduckdb
+} // namespace pgddb

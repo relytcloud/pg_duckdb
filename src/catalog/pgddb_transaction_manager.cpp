@@ -1,6 +1,6 @@
-#include "pgduckdb/catalog/pgduckdb_transaction_manager.hpp"
+#include "pgddb/catalog/pgddb_transaction_manager.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "pgduckdb/catalog/pgduckdb_transaction.hpp"
+#include "pgddb/catalog/pgddb_transaction.hpp"
 #include "pgddb/pg/snapshots.hpp"
 #include "pgduckdb/pgduckdb_process_lock.hpp"
 
@@ -8,7 +8,11 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
+
+// Bring pgduckdb's free functions and globals into scope while sibling
+// pieces still live in pgduckdb::. Future iterations shrink this.
+using namespace ::pgduckdb;
 
 PostgresTransactionManager::PostgresTransactionManager(duckdb::AttachedDatabase &_db_p, PostgresCatalog &_catalog)
     : TransactionManager(_db_p), catalog(_catalog), transaction_lock(), transactions() {
@@ -45,4 +49,4 @@ void
 PostgresTransactionManager::Checkpoint(duckdb::ClientContext &, bool /*force*/) {
 }
 
-} // namespace pgduckdb
+} // namespace pgddb

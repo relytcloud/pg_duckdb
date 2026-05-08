@@ -4,11 +4,11 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
 
 class PostgresStorageExtension : public duckdb::StorageExtension {
 public:
 	PostgresStorageExtension();
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

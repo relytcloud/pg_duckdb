@@ -6,7 +6,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
-#include "pgduckdb/catalog/pgduckdb_storage.hpp"
+#include "pgddb/catalog/pgddb_storage.hpp"
 #include "pgddb/pg/guc.hpp"
 #include "pgddb/pg/permissions.hpp"
 #include "pgddb/pg/string_utils.hpp"

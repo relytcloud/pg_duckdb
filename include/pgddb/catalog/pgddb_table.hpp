@@ -7,7 +7,7 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
 
 class PostgresTable : public duckdb::TableCatalogEntry {
 public:
@@ -35,4 +35,4 @@ private:
 	PostgresTable &operator=(const PostgresTable &) = delete;
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

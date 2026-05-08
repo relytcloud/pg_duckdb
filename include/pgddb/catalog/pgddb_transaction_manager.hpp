@@ -6,7 +6,7 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
 
 class PostgresCatalog;
 class PostgresTransaction;
@@ -27,4 +27,4 @@ private:
 	duckdb::reference_map_t<duckdb::Transaction, duckdb::unique_ptr<duckdb::Transaction>> transactions;
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

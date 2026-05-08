@@ -8,7 +8,7 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
 
 class PostgresCatalog;
 class PostgresSchema;
@@ -56,4 +56,4 @@ private:
 	Snapshot snapshot;
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

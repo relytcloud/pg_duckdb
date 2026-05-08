@@ -1,14 +1,13 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
-#include "pgduckdb/catalog/pgduckdb_catalog.hpp"
-#include "pgduckdb/catalog/pgduckdb_schema.hpp"
-#include "pgduckdb/catalog/pgduckdb_storage.hpp"
-#include "pgduckdb/catalog/pgduckdb_transaction.hpp"
+#include "pgddb/catalog/pgddb_catalog.hpp"
+#include "pgddb/catalog/pgddb_schema.hpp"
+#include "pgddb/catalog/pgddb_storage.hpp"
+#include "pgddb/catalog/pgddb_transaction.hpp"
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
-
+namespace pgddb {
 PostgresCatalog::PostgresCatalog(duckdb::AttachedDatabase &_db, const duckdb::string &connection_string)
     : Catalog(_db), path(connection_string), schemas() {
 }
@@ -105,4 +104,4 @@ PostgresCatalog::DropSchema(duckdb::ClientContext &, duckdb::DropInfo &) {
 	throw duckdb::NotImplementedException("DropSchema not supported yet");
 }
 
-} // namespace pgduckdb
+} // namespace pgddb

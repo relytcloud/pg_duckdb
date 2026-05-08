@@ -1,11 +1,10 @@
-#include "pgduckdb/catalog/pgduckdb_storage.hpp"
-#include "pgduckdb/catalog/pgduckdb_catalog.hpp"
-#include "pgduckdb/catalog/pgduckdb_transaction_manager.hpp"
+#include "pgddb/catalog/pgddb_storage.hpp"
+#include "pgddb/catalog/pgddb_catalog.hpp"
+#include "pgddb/catalog/pgddb_transaction_manager.hpp"
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
-
+namespace pgddb {
 static duckdb::unique_ptr<duckdb::TransactionManager>
 CreateTransactionManager(duckdb::optional_ptr<duckdb::StorageExtensionInfo>, duckdb::AttachedDatabase &db,
                          duckdb::Catalog &catalog) {
@@ -17,4 +16,4 @@ PostgresStorageExtension::PostgresStorageExtension() {
 	create_transaction_manager = CreateTransactionManager;
 }
 
-} // namespace pgduckdb
+} // namespace pgddb

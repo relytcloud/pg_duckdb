@@ -2,7 +2,7 @@
 
 #include "duckdb.hpp"
 
-#include "pgduckdb/catalog/pgduckdb_transaction.hpp"
+#include "pgddb/catalog/pgddb_transaction.hpp"
 #include "pgduckdb/scan/postgres_scan.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"

@@ -1,7 +1,7 @@
-#include "pgduckdb/catalog/pgduckdb_catalog.hpp"
-#include "pgduckdb/catalog/pgduckdb_schema.hpp"
-#include "pgduckdb/catalog/pgduckdb_transaction.hpp"
-#include "pgduckdb/catalog/pgduckdb_table.hpp"
+#include "pgddb/catalog/pgddb_catalog.hpp"
+#include "pgddb/catalog/pgddb_schema.hpp"
+#include "pgddb/catalog/pgddb_transaction.hpp"
+#include "pgddb/catalog/pgddb_table.hpp"
 #include "pgduckdb/scan/postgres_scan.hpp"
 #include "pgddb/pg/relations.hpp"
 
@@ -11,8 +11,7 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
-
+namespace pgddb {
 void
 ClosePostgresRelations(duckdb::ClientContext &context) {
 	auto context_state = context.registered_state->GetOrCreate<PostgresContextState>("pgduckdb");
@@ -108,4 +107,4 @@ PostgresTransaction::GetCatalogEntry(duckdb::CatalogType type, const duckdb::str
 	}
 }
 
-} // namespace pgduckdb
+} // namespace pgddb

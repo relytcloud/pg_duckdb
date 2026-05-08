@@ -5,7 +5,7 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
 
 class PostgresSchema;
 
@@ -52,4 +52,4 @@ private:
 	duckdb::case_insensitive_map_t<duckdb::unique_ptr<PostgresSchema>> schemas;
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

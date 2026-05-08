@@ -1,7 +1,7 @@
-#include "pgduckdb/catalog/pgduckdb_table.hpp"
+#include "pgddb/catalog/pgddb_table.hpp"
 
 #include "pgduckdb/scan/postgres_scan.hpp"
-#include "pgduckdb/catalog/pgduckdb_schema.hpp"
+#include "pgddb/catalog/pgddb_schema.hpp"
 #include "pgduckdb/logger.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgduckdb/pgduckdb_process_lock.hpp"
@@ -11,7 +11,11 @@
 
 #include "pgduckdb/utility/cpp_only_file.hpp" // Must be last include.
 
-namespace pgduckdb {
+namespace pgddb {
+
+// Bring pgduckdb's free functions and globals into scope while sibling
+// pieces still live in pgduckdb::. Future iterations shrink this.
+using namespace ::pgduckdb;
 
 PostgresTable::PostgresTable(duckdb::Catalog &_catalog, duckdb::SchemaCatalogEntry &_schema,
                              duckdb::CreateTableInfo &_info, Relation _rel, Cardinality _cardinality,
@@ -62,4 +66,4 @@ PostgresTable::GetStorageInfo(duckdb::ClientContext &) {
 	throw duckdb::NotImplementedException("GetStorageInfo not supported yet");
 }
 
-} // namespace pgduckdb
+} // namespace pgddb
