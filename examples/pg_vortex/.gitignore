@@ -1,0 +1,6 @@
+# pg_regress artifacts
+/tmp_check/
+/results/
+/log/
+/regression.diffs
+/regression.out

@@ -1,0 +1,4 @@
+comment = 'pg_vortex - read Vortex files in PostgreSQL'
+default_version = '0.1.0'
+module_pathname = '$libdir/pg_vortex'
+relocatable = false

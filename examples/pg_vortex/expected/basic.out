@@ -1,0 +1,7 @@
+CREATE EXTENSION pg_vortex;
+SELECT vortex_version();
+ vortex_version  
+-----------------
+ pg_vortex 0.1.0
+(1 row)
+
