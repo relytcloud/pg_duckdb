@@ -9,7 +9,7 @@ extern "C" {
 #include "parser/parse_expr.h"
 #include "nodes/subscripting.h"
 #include "nodes/nodeFuncs.h"
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 }
 
 namespace pgduckdb {

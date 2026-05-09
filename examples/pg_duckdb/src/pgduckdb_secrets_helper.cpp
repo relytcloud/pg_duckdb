@@ -22,7 +22,7 @@ extern "C" {
 #include "utils/inval.h"
 #include "utils/syscache.h"
 
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 }
 
 namespace pgduckdb {

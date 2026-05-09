@@ -4,7 +4,7 @@
 #include "pgddb/pgddb_duckdb.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 
 extern "C" {

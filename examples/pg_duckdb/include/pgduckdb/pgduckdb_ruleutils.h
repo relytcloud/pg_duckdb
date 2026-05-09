@@ -1,5 +1,5 @@
 #include "postgres.h"
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 
 typedef struct StarReconstructionContext {
 	List *target_list;

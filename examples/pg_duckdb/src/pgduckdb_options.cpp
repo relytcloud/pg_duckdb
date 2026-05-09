@@ -1,6 +1,6 @@
 #include "duckdb.hpp"
 
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 #include "pgddb/pgddb_duckdb.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
@@ -315,7 +315,7 @@ DECLARE_PG_FUNCTION(duckdb_map_out) {
 DECLARE_PG_FUNCTION(pgduckdb_test_escape_uri) {
 	auto input = pgddb::pg::GetArgString(fcinfo, 0);
 	std::ostringstream oss;
-	pgduckdb::AppendEscapedUri(oss, input.c_str());
+	pgddb::AppendEscapedUri(oss, input.c_str());
 	auto result = oss.str();
 	auto text_result = cstring_to_text(result.c_str());
 	PG_RETURN_TEXT_P(text_result);

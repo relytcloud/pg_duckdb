@@ -1,5 +1,5 @@
 #include "pgduckdb/pgduckdb_planner.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
@@ -48,7 +48,7 @@ extern "C" {
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
 #include "pgduckdb/utility/copy.hpp"
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 #include <inttypes.h>
 
 namespace pgduckdb {

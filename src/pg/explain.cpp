@@ -1,5 +1,5 @@
 #include "pgddb/pg/explain.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 
 extern "C" {
 #include "postgres.h"

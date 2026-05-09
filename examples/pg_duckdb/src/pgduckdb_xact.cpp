@@ -4,7 +4,7 @@
 #include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 
 #include "pgddb/pg/transactions.hpp"

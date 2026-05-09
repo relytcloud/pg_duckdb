@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pgduckdb/pgduckdb_process_lock.hpp"
+#include "pgddb/pgddb_process_lock.hpp"
 
 #include "pgddb/utility/cpp_only_file.hpp" // Must be last include.
 
@@ -11,7 +11,7 @@ int errmsg_internal(const char *fmt, ...);
 bool message_level_is_interesting(int elevel);
 }
 
-namespace pgduckdb {
+namespace pgddb {
 
 /* PG Error level codes */
 #define DEBUG5              10
@@ -46,7 +46,7 @@ namespace pgduckdb {
 		pd_prevent_errno_in_scope();                                                                                   \
 		static_assert(elevel >= DEBUG5 && elevel <= WARNING_CLIENT_ONLY, "Invalid error level");                       \
 		if (message_level_is_interesting(elevel)) {                                                                    \
-			std::lock_guard<std::recursive_mutex> __pd_log_lock(pgduckdb::GlobalProcessLock::GetLock());               \
+			std::lock_guard<std::recursive_mutex> __pd_log_lock(pgddb::GlobalProcessLock::GetLock());               \
 			if (errstart(elevel, domain))                                                                              \
 				__VA_ARGS__, errfinish(__FILE__, __LINE__, __func__);                                                  \
 		}                                                                                                              \
@@ -58,4 +58,4 @@ namespace pgduckdb {
 
 #define pd_log(elevel, ...) pd_ereport(elevel, errmsg_internal(__VA_ARGS__))
 
-} // namespace pgduckdb
+} // namespace pgddb

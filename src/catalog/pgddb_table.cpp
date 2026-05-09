@@ -2,9 +2,9 @@
 
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/catalog/pgddb_schema.hpp"
-#include "pgduckdb/logger.hpp"
+#include "pgddb/logger.hpp"
 #include "pgddb/pg/relations.hpp"
-#include "pgduckdb/pgduckdb_process_lock.hpp"
+#include "pgddb/pgddb_process_lock.hpp"
 #include "pgduckdb/pgduckdb_types.hpp" // ConvertPostgresToDuckColumnType
 
 #include "duckdb/parser/parsed_data/create_table_info.hpp"

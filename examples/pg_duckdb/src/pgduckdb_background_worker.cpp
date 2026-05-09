@@ -17,7 +17,7 @@
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgduckdb/pgduckdb_fdw.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 #include "pgddb/pg/string_utils.hpp"

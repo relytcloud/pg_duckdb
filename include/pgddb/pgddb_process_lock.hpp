@@ -2,7 +2,7 @@
 
 #include <mutex>
 
-namespace pgduckdb {
+namespace pgddb {
 
 /*
  * GlobalProcessLock is used to synchronize calls to PG functions that modify global variables. Examples
@@ -18,4 +18,4 @@ public:
 	}
 };
 
-} // namespace pgduckdb
+} // namespace pgddb

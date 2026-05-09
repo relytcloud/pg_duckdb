@@ -4,7 +4,7 @@
 #include "duckdb/common/error_data.hpp"
 #include "pgddb/pgddb_duckdb.hpp"
 #include "pgddb/pg/error_data.hpp"
-#include "pgduckdb/logger.hpp"
+#include "pgddb/logger.hpp"
 
 #include <setjmp.h>
 
@@ -28,7 +28,7 @@ extern pg_stack_base_t set_stack_base();
 extern void restore_stack_base(pg_stack_base_t base);
 }
 
-namespace pgduckdb {
+namespace pgddb {
 
 struct PgExceptionGuard {
 	PgExceptionGuard() : _save_exception_stack(PG_exception_stack), _save_context_stack(error_context_stack) {
@@ -84,7 +84,7 @@ private:
 template <typename Func, Func func, typename... FuncArgs>
 typename std::invoke_result<Func, FuncArgs...>::type
 __PostgresFunctionGuard__(const char *func_name, FuncArgs... args) {
-	std::lock_guard<std::recursive_mutex> lock(pgduckdb::GlobalProcessLock::GetLock());
+	std::lock_guard<std::recursive_mutex> lock(pgddb::GlobalProcessLock::GetLock());
 	MemoryContext ctx = CurrentMemoryContext;
 
 	{ // PG_TRY
@@ -119,7 +119,7 @@ __PostgresFunctionGuard__(const char *func_name, FuncArgs... args) {
 }
 
 #define PostgresFunctionGuard(FUNC, ...)                                                                               \
-	pgduckdb::__PostgresFunctionGuard__<decltype(&FUNC), &FUNC>(#FUNC, ##__VA_ARGS__)
+	pgddb::__PostgresFunctionGuard__<decltype(&FUNC), &FUNC>(#FUNC, ##__VA_ARGS__)
 
 template <typename T, typename ReturnType, typename... FuncArgs>
 ReturnType
@@ -158,8 +158,8 @@ __PostgresMemberGuard__(ReturnType (T::*func)(FuncArgs... args), T *instance, co
 	throw duckdb::Exception(duckdb::ExceptionType::EXECUTOR, message);
 }
 
-#define PostgresMemberGuard(FUNC, ...) pgduckdb::__PostgresMemberGuard__(&FUNC, this, __func__, ##__VA_ARGS__)
+#define PostgresMemberGuard(FUNC, ...) pgddb::__PostgresMemberGuard__(&FUNC, this, __func__, ##__VA_ARGS__)
 
 void AppendEscapedUri(std::ostringstream &oss, const char *str);
 
-} // namespace pgduckdb
+} // namespace pgddb

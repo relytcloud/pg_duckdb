@@ -19,13 +19,13 @@
 #include "pgduckdb/pgduckdb_secrets_helper.hpp"
 #include "pgduckdb/pgduckdb_unsupported_type_optimizer.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgddb/scan/postgres_scan.hpp"
 
 #include "pgddb/utility/cpp_wrapper.hpp"
 #include "pgddb/utility/signal_guard.hpp"
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 
 extern "C" {
 #include "postgres.h"

@@ -21,7 +21,7 @@ extern "C" {
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 }
 
 #include "pgddb/pg/string_utils.hpp"

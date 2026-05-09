@@ -5,7 +5,7 @@
 #include "pgddb/pg/explain.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 
 extern "C" {
 #include "postgres.h"
@@ -33,7 +33,7 @@ extern "C" {
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 #include "pgduckdb/utility/copy.hpp"
 #include "pgduckdb/vendor/pg_explain.hpp"
-#include "pgduckdb/vendor/pg_list.hpp"
+#include "pgddb/vendor/pg_list.hpp"
 #include "pgduckdb/pgduckdb_node.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 

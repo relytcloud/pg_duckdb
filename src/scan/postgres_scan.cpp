@@ -11,13 +11,13 @@
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/scan/postgres_table_reader.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgddb/pg/memory.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 
-#include "pgduckdb/pgduckdb_process_lock.hpp"
-#include "pgduckdb/logger.hpp"
+#include "pgddb/pgddb_process_lock.hpp"
+#include "pgddb/logger.hpp"
 
 #include <numeric> // std::accumulate
 #include <optional>

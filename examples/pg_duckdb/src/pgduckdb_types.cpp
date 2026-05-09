@@ -8,7 +8,7 @@
 #include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/pg/memory.hpp"
@@ -38,7 +38,7 @@ extern "C" {
 }
 
 #include "pgduckdb/pgduckdb_detoast.hpp"
-#include "pgduckdb/pgduckdb_process_lock.hpp"
+#include "pgddb/pgddb_process_lock.hpp"
 
 namespace pgduckdb {
 
@@ -2115,7 +2115,7 @@ InsertTuplesIntoChunk(duckdb::DataChunk &output, pgddb::PostgresScanLocalState &
 		std::unique_ptr<std::lock_guard<std::recursive_mutex>> lock_guard;
 		MemoryContext old_ctx = NULL;
 		if (!is_safe_type) {
-			lock_guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(GlobalProcessLock::GetLock());
+			lock_guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(pgddb::GlobalProcessLock::GetLock());
 			old_ctx = pgddb::pg::MemoryContextSwitchTo(scan_global_state->duckdb_scan_memory_ctx);
 		}
 

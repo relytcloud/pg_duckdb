@@ -1,4 +1,4 @@
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_extensions.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 #include "pgddb/pg/functions.hpp"

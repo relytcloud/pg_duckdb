@@ -1,7 +1,7 @@
 #include "duckdb.hpp"
 
 #include "pgduckdb/pgduckdb_types.hpp"
-#include "pgduckdb/pgduckdb_utils.hpp"
+#include "pgddb/pgddb_utils.hpp"
 
 extern "C" {
 #include "postgres.h"
@@ -22,7 +22,7 @@ extern "C" {
 #include "utils/expandeddatum.h"
 }
 
-#include "pgduckdb/pgduckdb_process_lock.hpp"
+#include "pgddb/pgddb_process_lock.hpp"
 #include "pgduckdb/pgduckdb_detoast.hpp"
 
 /*
