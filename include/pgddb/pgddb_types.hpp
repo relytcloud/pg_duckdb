@@ -41,4 +41,37 @@ void InsertTupleIntoChunk(duckdb::DataChunk &output, PostgresScanLocalState &sca
 void InsertTuplesIntoChunk(duckdb::DataChunk &output, PostgresScanLocalState &scan_local_state, TupleTableSlot **slots,
                            int num_slots);
 
+// Public helpers exposed for consumer-side hook implementations.
+bool IsNestedType(duckdb::LogicalTypeId type_id);
+const duckdb::LogicalType &GetChildType(const duckdb::LogicalType &type);
+Datum ConvertToStringDatum(const duckdb::Value &value);
+
+// Type extension hooks. Standard PG hook pattern (function pointer global plus
+// prev_hook chaining). Consumer extensions install their impls in _PG_init.
+
+// Called in the default branch of the PG-Oid -> DuckDB LogicalType switch
+// when the Oid isn't a built-in PG type. Return true and fill *out for your
+// custom type; chain to prev_hook otherwise.
+typedef bool (*ConvertPostgresToBaseDuckColumnType_hook_t)(Oid pg_oid, duckdb::LogicalType *out);
+extern ConvertPostgresToBaseDuckColumnType_hook_t ConvertPostgresToBaseDuckColumnType_hook;
+
+// Called when libpgddb's LogicalType -> PG Oid switch has no built-in case
+// (currently STRUCT / UNION / MAP). Return true and fill *out.
+typedef bool (*GetPostgresDuckDBType_hook_t)(const duckdb::LogicalType &type, Oid *out);
+extern GetPostgresDuckDBType_hook_t GetPostgresDuckDBType_hook;
+
+// Same as above but for the LIST/ARRAY element direction (returns the array form).
+typedef bool (*GetPostgresArrayDuckDBType_hook_t)(const duckdb::LogicalType &type, Oid *out);
+extern GetPostgresArrayDuckDBType_hook_t GetPostgresArrayDuckDBType_hook;
+
+// Called in the default branch of ConvertDuckToPostgresValue when the PG Oid
+// isn't a built-in. Return true if the hook stored the value into the slot.
+typedef bool (*ConvertDuckToPostgresValue_hook_t)(Oid pg_oid, duckdb::Value &value, TupleTableSlot *slot, uint64_t col);
+extern ConvertDuckToPostgresValue_hook_t ConvertDuckToPostgresValue_hook;
+
+// Policy: should an unsupported-precision NUMERIC fall back to DOUBLE (true)
+// or throw an UnsupportedPostgresType error (false)? Default false.
+typedef bool (*ConvertUnsupportedNumericToDouble_hook_t)(void);
+extern ConvertUnsupportedNumericToDouble_hook_t ConvertUnsupportedNumericToDouble_hook;
+
 } // namespace pgddb

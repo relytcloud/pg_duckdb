@@ -5,9 +5,7 @@
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
-#include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgddb/pgddb_types.hpp"
-#include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgddb/pgddb_utils.hpp"
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/pg/memory.hpp"
@@ -38,14 +36,15 @@ extern "C" {
 
 #include "pgddb/pgddb_detoast.hpp"
 #include "pgddb/pgddb_process_lock.hpp"
+#include "pgddb/pgddb_types_array.hpp"
 
 namespace pgddb {
 
-// Bring pgduckdb's free functions and globals into scope while sibling pieces
-// (DuckdbStructOid / DuckdbUnionOid / DuckdbMapOid composite type Oids and the
-// duckdb_convert_unsupported_numeric_to_double GUC) still live in pgduckdb::.
-// Type hooks in the next iteration will narrow this.
-using namespace ::pgduckdb;
+ConvertPostgresToBaseDuckColumnType_hook_t ConvertPostgresToBaseDuckColumnType_hook = nullptr;
+GetPostgresDuckDBType_hook_t GetPostgresDuckDBType_hook = nullptr;
+GetPostgresArrayDuckDBType_hook_t GetPostgresArrayDuckDBType_hook = nullptr;
+ConvertDuckToPostgresValue_hook_t ConvertDuckToPostgresValue_hook = nullptr;
+ConvertUnsupportedNumericToDouble_hook_t ConvertUnsupportedNumericToDouble_hook = nullptr;
 
 NumericVar FromNumeric(Numeric num);
 
@@ -207,7 +206,7 @@ ValidTimestampOrTimestampTz(int64_t timestamp) {
 	return timestamp >= PGDUCKDB_MIN_TIMESTAMP_VALUE && timestamp < PGDUCKDB_MAX_TIMESTAMP_VALUE;
 }
 
-static Datum
+Datum
 ConvertToStringDatum(const duckdb::Value &value) {
 	auto str = value.ToString();
 	auto varchar = str.c_str();
@@ -518,24 +517,6 @@ ConvertUUIDDatum(const duckdb::Value &value) {
 	}
 
 	return UUIDPGetDatum(postgres_uuid);
-}
-
-inline Datum
-ConvertDuckStructDatum(const duckdb::Value &value) {
-	D_ASSERT(value.type().id() == duckdb::LogicalTypeId::STRUCT);
-	return ConvertToStringDatum(value);
-}
-
-static Datum
-ConvertUnionDatum(const duckdb::Value &value) {
-	D_ASSERT(value.type().id() == duckdb::LogicalTypeId::UNION);
-	return ConvertToStringDatum(value);
-}
-
-static Datum
-ConvertMapDatum(const duckdb::Value &value) {
-	D_ASSERT(value.type().id() == duckdb::LogicalTypeId::MAP);
-	return ConvertToStringDatum(value);
 }
 
 static duckdb::interval_t
@@ -873,53 +854,13 @@ using TextArray = PODArray<PostgresOIDMapping<TEXTOID>>;
 using NumericArray = PODArray<PostgresOIDMapping<NUMERICOID>>;
 using ByteArray = PODArray<PostgresOIDMapping<BYTEAOID>>;
 
-// Complex type arrays with runtime OID determination
-struct StructArray {
-public:
-	static ArrayType *
-	ConstructArray(Datum *datums, bool *nulls, int ndims, int *dims, int *lower_bound) {
-		return construct_md_array(datums, nulls, ndims, dims, lower_bound, pgduckdb::DuckdbStructOid(), -1, false, 'i');
-	}
-
-	static Datum
-	ConvertToPostgres(const duckdb::Value &val) {
-		return ConvertDuckStructDatum(val);
-	}
-};
-
-struct UnionArray {
-public:
-	static ArrayType *
-	ConstructArray(Datum *datums, bool *nulls, int ndims, int *dims, int *lower_bound) {
-		return construct_md_array(datums, nulls, ndims, dims, lower_bound, pgduckdb::DuckdbUnionOid(), -1, false, 'i');
-	}
-
-	static Datum
-	ConvertToPostgres(const duckdb::Value &val) {
-		return ConvertUnionDatum(val);
-	}
-};
-
-struct MapArray {
-public:
-	static ArrayType *
-	ConstructArray(Datum *datums, bool *nulls, int ndims, int *dims, int *lower_bound) {
-		return construct_md_array(datums, nulls, ndims, dims, lower_bound, pgduckdb::DuckdbMapOid(), -1, false, 'i');
-	}
-
-	static Datum
-	ConvertToPostgres(const duckdb::Value &val) {
-		return ConvertMapDatum(val);
-	}
-};
-
-static bool
+bool
 IsNestedType(const duckdb::LogicalTypeId type_id) {
 	/* TODO: Add more nested type*/
 	return type_id == duckdb::LogicalTypeId::LIST || type_id == duckdb::LogicalTypeId::ARRAY;
 }
 
-static const duckdb::LogicalType &
+const duckdb::LogicalType &
 GetChildType(const duckdb::LogicalType &type) {
 	/* TODO: Add more nested type*/
 	switch (type.id()) {
@@ -930,16 +871,6 @@ GetChildType(const duckdb::LogicalType &type) {
 	default:
 		throw duckdb::InvalidInputException("Expected a LIST or ARRAY type, got '%s' instead", type.ToString());
 	}
-}
-
-static idx_t
-GetDuckDBListDimensionality(const duckdb::LogicalType &nested_type, idx_t depth = 0) {
-	D_ASSERT(IsNestedType(nested_type.id()));
-	auto &child = GetChildType(nested_type);
-	if (IsNestedType(child.id())) {
-		return GetDuckDBListDimensionality(child, depth + 1);
-	}
-	return depth + 1;
 }
 
 namespace {
@@ -954,146 +885,7 @@ CreateUnsupportedPostgresType(std::string error_message) {
 	return type;
 }
 
-template <class OP>
-struct PostgresArrayAppendState {
-public:
-	PostgresArrayAppendState(idx_t _number_of_dimensions)
-	    : count(0), expected_values(1), datums(nullptr), nulls(nullptr), dimensions(nullptr), lower_bounds(nullptr),
-	      number_of_dimensions(_number_of_dimensions) {
-		dimensions = (int *)palloc(number_of_dimensions * sizeof(int));
-		lower_bounds = (int *)palloc(number_of_dimensions * sizeof(int));
-		for (idx_t i = 0; i < number_of_dimensions; i++) {
-			// Initialize everything at -1 to indicate that it isn't set yet
-			dimensions[i] = -1;
-		}
-		for (idx_t i = 0; i < number_of_dimensions; i++) {
-			// Lower bounds have no significance for us
-			lower_bounds[i] = 1;
-		}
-	}
-
-private:
-	static inline const duckdb::vector<duckdb::Value> &
-	GetChildren(const duckdb::Value &value) {
-		switch (value.type().InternalType()) {
-		case duckdb::PhysicalType::LIST:
-			return duckdb::ListValue::GetChildren(value);
-		case duckdb::PhysicalType::ARRAY:
-			return duckdb::ArrayValue::GetChildren(value);
-		default:
-			throw duckdb::InvalidInputException("Expected a LIST or ARRAY type, got '%s' instead",
-			                                    value.type().ToString());
-		}
-	}
-
-public:
-	void
-	AppendValueAtDimension(const duckdb::Value &value, idx_t dimension) {
-		auto &values = GetChildren(value);
-
-		if (values.size() > PG_INT32_MAX) {
-			throw duckdb::InvalidInputException("Too many values (%llu) at dimension %d: would overflow", values.size(),
-			                                    dimension);
-		}
-
-		int32_t to_append = values.size();
-
-		D_ASSERT(dimension < number_of_dimensions);
-		if (dimensions[dimension] == -1) {
-			// This dimension is not set yet
-			dimensions[dimension] = to_append;
-			expected_values *= to_append;
-			if (pg_mul_u64_overflow(expected_values, static_cast<uint64>(to_append), &expected_values)) {
-				throw duckdb::InvalidInputException(
-				    "Multiplying %d expected values by %d new ones at dimension %d would overflow", expected_values,
-				    to_append, dimension);
-			}
-		}
-		if (dimensions[dimension] != to_append) {
-			throw duckdb::InvalidInputException("Expected %d values in list at dimension %d, found %d instead",
-			                                    dimensions[dimension], dimension, to_append);
-		}
-
-		auto &child_type = GetChildType(value.type());
-		if (child_type.id() == duckdb::LogicalTypeId::LIST) {
-			for (auto &child_val : values) {
-				if (child_val.IsNull()) {
-					// Postgres arrays can not contains nulls at the array level
-					// i.e {{1,2}, NULL, {3,4}} is not supported
-					throw duckdb::InvalidInputException("Returned LIST contains a NULL at an intermediate dimension "
-					                                    "(not the value level), which is not supported in Postgres");
-				}
-				AppendValueAtDimension(child_val, dimension + 1);
-			}
-		} else {
-			if (!datums) {
-				// First time we get to the outer most child
-				// Because we traversed all dimensions we know how many values we have to allocate for
-				datums = (Datum *)palloc(expected_values * sizeof(Datum));
-				nulls = (bool *)palloc(expected_values * sizeof(bool));
-			}
-
-			for (auto &child_val : values) {
-				nulls[count] = child_val.IsNull();
-				if (!nulls[count]) {
-					datums[count] = OP::ConvertToPostgres(child_val);
-				}
-				++count;
-			}
-		}
-	}
-
-private:
-	idx_t count = 0;
-
-public:
-	uint64 expected_values = 1;
-	Datum *datums = nullptr;
-	bool *nulls = nullptr;
-	int *dimensions;
-	int *lower_bounds;
-	idx_t number_of_dimensions;
-};
-
 } // namespace
-
-template <class OP>
-static void
-ConvertDuckToPostgresArray(TupleTableSlot *slot, duckdb::Value &value, idx_t col) {
-	D_ASSERT(IsNestedType(value.type().id()));
-	auto number_of_dimensions = GetDuckDBListDimensionality(value.type());
-
-	PostgresArrayAppendState<OP> append_state(number_of_dimensions);
-	append_state.AppendValueAtDimension(value, 0);
-
-	// Create the array
-	auto datums = append_state.datums;
-	auto nulls = append_state.nulls;
-	auto dimensions = append_state.dimensions;
-	auto lower_bounds = append_state.lower_bounds;
-
-	// When we insert an empty array into multi-dimensions array,
-	// the dimensions[1] to dimension[number_of_dimensions-1] will not be set and always be -1.
-	for (idx_t i = 0; i < number_of_dimensions; i++) {
-		if (dimensions[i] == -1) {
-			// This dimension is not set yet, we should set them to 0.
-			// Otherwise, it will cause some issues when we call ConstructArray.
-			dimensions[i] = 0;
-		}
-	}
-
-	auto arr = OP::ConstructArray(datums, nulls, number_of_dimensions, dimensions, lower_bounds);
-
-	// Free allocated memory
-	if (append_state.expected_values > 0) {
-		pfree(datums);
-		pfree(nulls);
-	}
-	pfree(dimensions);
-	pfree(lower_bounds);
-
-	slot->tts_values[col] = PointerGetDatum(arr);
-}
 
 bool
 ConvertDuckToPostgresValue(TupleTableSlot *slot, duckdb::Value &value, idx_t col) {
@@ -1250,29 +1042,11 @@ ConvertDuckToPostgresValue(TupleTableSlot *slot, duckdb::Value &value, idx_t col
 		break;
 	}
 	default: {
-		// Since oids of the following types calculated at runtime, it is not
-		// possible to compile the code while placing it as a separate case
-		// in the switch-case clause above.
-		if (oid == pgduckdb::DuckdbStructOid()) {
-			slot->tts_values[col] = ConvertDuckStructDatum(value);
-			return true;
-		} else if (oid == pgduckdb::DuckdbUnionOid()) {
-			slot->tts_values[col] = ConvertUnionDatum(value);
-			return true;
-		} else if (oid == pgduckdb::DuckdbMapOid()) {
-			slot->tts_values[col] = ConvertMapDatum(value);
-			return true;
-		} else if (oid == pgduckdb::DuckdbStructArrayOid()) {
-			ConvertDuckToPostgresArray<StructArray>(slot, value, col);
-			return true;
-		} else if (oid == pgduckdb::DuckdbUnionArrayOid()) {
-			ConvertDuckToPostgresArray<UnionArray>(slot, value, col);
-			return true;
-		} else if (oid == pgduckdb::DuckdbMapArrayOid()) {
-			ConvertDuckToPostgresArray<MapArray>(slot, value, col);
+		// Non-built-in PG type: consult the consumer's hook.
+		if (ConvertDuckToPostgresValue_hook && ConvertDuckToPostgresValue_hook(oid, value, slot, col)) {
 			return true;
 		}
-		elog(WARNING, "(PGDuckDB/ConvertDuckToPostgresValue) Unsuported pgduckdb type: %d", oid);
+		elog(WARNING, "(PGDuckDB/ConvertDuckToPostgresValue) Unsupported type: %d", oid);
 		return false;
 	}
 	}
@@ -1361,7 +1135,7 @@ ConvertPostgresToBaseDuckColumnType(Form_pg_attribute &attribute) {
 		 * https://duckdb.org/docs/stable/sql/data_types/numeric.html#fixed-point-decimals
 		 */
 		if (type_modifier == -1 || precision < 1 || precision > 38 || scale < 0 || scale > 38 || scale > precision) {
-			if (duckdb_convert_unsupported_numeric_to_double) {
+			if (ConvertUnsupportedNumericToDouble_hook && ConvertUnsupportedNumericToDouble_hook()) {
 				auto extra_type_info = duckdb::make_shared_ptr<NumericAsDouble>();
 				return duckdb::LogicalType(duckdb::LogicalTypeId::DOUBLE, std::move(extra_type_info));
 			}
@@ -1404,18 +1178,12 @@ ConvertPostgresToBaseDuckColumnType(Form_pg_attribute &attribute) {
 	case BYTEAARRAYOID:
 		return duckdb::LogicalTypeId::BLOB;
 	default:
-		if (typoid == pgduckdb::DuckdbUnionOid()) {
-			return duckdb::LogicalTypeId::UNION;
-		} else if (typoid == pgduckdb::DuckdbStructOid()) {
-			return duckdb::LogicalTypeId::STRUCT;
-		} else if (typoid == pgduckdb::DuckdbMapOid()) {
-			return duckdb::LogicalTypeId::MAP;
-		} else if (typoid == pgduckdb::DuckdbUnionArrayOid()) {
-			return duckdb::LogicalTypeId::UNION;
-		} else if (typoid == pgduckdb::DuckdbStructArrayOid()) {
-			return duckdb::LogicalTypeId::STRUCT;
-		} else if (typoid == pgduckdb::DuckdbMapArrayOid()) {
-			return duckdb::LogicalTypeId::MAP;
+		// Non-built-in PG type: consult the consumer's hook.
+		if (ConvertPostgresToBaseDuckColumnType_hook) {
+			duckdb::LogicalType out;
+			if (ConvertPostgresToBaseDuckColumnType_hook(typoid, &out)) {
+				return out;
+			}
 		}
 		return CreateUnsupportedPostgresType("Oid=" + std::to_string(attribute->atttypid));
 	}
@@ -1513,13 +1281,13 @@ GetPostgresArrayDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 		return BYTEAARRAYOID;
 	case duckdb::LogicalTypeId::BIGNUM:
 		return NUMERICARRAYOID;
-	case duckdb::LogicalTypeId::STRUCT:
-		return pgduckdb::DuckdbStructArrayOid();
-	case duckdb::LogicalTypeId::UNION:
-		return pgduckdb::DuckdbUnionArrayOid();
-	case duckdb::LogicalTypeId::MAP:
-		return pgduckdb::DuckdbMapArrayOid();
 	default: {
+		if (GetPostgresArrayDuckDBType_hook) {
+			Oid out;
+			if (GetPostgresArrayDuckDBType_hook(type, &out)) {
+				return out;
+			}
+		}
 		if (throw_error) {
 			throw duckdb::NotImplementedException("Unsupported DuckDB `LIST` subtype: " + type.ToString());
 		} else {
@@ -1601,8 +1369,6 @@ GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 		return UUIDOID;
 	case duckdb::LogicalTypeId::BIGNUM:
 		return NUMERICOID;
-	case duckdb::LogicalTypeId::STRUCT:
-		return pgduckdb::DuckdbStructOid();
 	case duckdb::LogicalTypeId::LIST:
 	case duckdb::LogicalTypeId::ARRAY: {
 		const duckdb::LogicalType *duck_type = &type;
@@ -1614,13 +1380,15 @@ GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 	}
 	case duckdb::LogicalTypeId::BLOB:
 		return BYTEAOID;
-	case duckdb::LogicalTypeId::UNION:
-		return pgduckdb::DuckdbUnionOid();
-	case duckdb::LogicalTypeId::MAP:
-		return pgduckdb::DuckdbMapOid();
 	case duckdb::LogicalTypeId::ENUM:
 		return VARCHAROID;
 	default: {
+		if (GetPostgresDuckDBType_hook) {
+			Oid out;
+			if (GetPostgresDuckDBType_hook(type, &out)) {
+				return out;
+			}
+		}
 		if (throw_error) {
 			throw duckdb::NotImplementedException("Could not convert DuckDB type: " + type.ToString() +
 			                                      " to Postgres type");
