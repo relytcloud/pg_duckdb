@@ -1,6 +1,6 @@
 #include "duckdb.hpp"
 #include "pgddb/pg/string_utils.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgddb/pg/locale.hpp"
@@ -687,8 +687,8 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 		 * precision specified. Because that means something very different in
 		 * Postgres
 		 */
-		auto duck_type = pgduckdb::ConvertPostgresToDuckColumnType(column);
-		pgduckdb::GetPostgresDuckDBType(duck_type, true);
+		auto duck_type = pgddb::ConvertPostgresToDuckColumnType(column);
+		pgddb::GetPostgresDuckDBType(duck_type, true);
 
 		const char *column_type_name = format_type_with_typemod(column->atttypid, column->atttypmod);
 

@@ -1,5 +1,5 @@
 #include "pgduckdb/pgduckdb_unsupported_type_optimizer.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 
 #include "duckdb/optimizer/optimizer_extension.hpp"
 #include "duckdb/planner/logical_operator.hpp"
@@ -25,7 +25,7 @@ UnsupportedTypeOptimizer::VisitExpression(duckdb::unique_ptr<duckdb::Expression>
 
 void
 UnsupportedTypeOptimizer::CheckExpressionForUnsupportedTypes(duckdb::Expression &expr) {
-	CheckForUnsupportedPostgresType(expr.return_type);
+	pgddb::CheckForUnsupportedPostgresType(expr.return_type);
 }
 
 void

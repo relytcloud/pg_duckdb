@@ -16,7 +16,7 @@
 #include "duckdb/main/attached_database.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgduckdb/pgduckdb_fdw.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgddb/pgddb_utils.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
@@ -607,7 +607,7 @@ CreatePgViewString(duckdb::CreateViewInfo &info, bool is_default_db) {
 	bool first = true;
 
 	for (; it_names != info.names.end() && it_types != info.types.end(); it_names++, it_types++) {
-		Oid postgres_type = GetPostgresDuckDBType(*it_types);
+		Oid postgres_type = pgddb::GetPostgresDuckDBType(*it_types);
 		if (postgres_type == InvalidOid) {
 			elog(WARNING, "Skipping column %s in table %s.%s.%s due to unsupported type", it_names->c_str(),
 			     info.catalog.c_str(), info.schema.c_str(), info.view_name.c_str());
@@ -620,7 +620,7 @@ CreatePgViewString(duckdb::CreateViewInfo &info, bool is_default_db) {
 		}
 
 		oss << "r[" << duckdb::KeywordHelper::WriteQuoted(*it_names, '\'') << "]::";
-		int32_t typemod = GetPostgresDuckDBTypemod(*it_types);
+		int32_t typemod = pgddb::GetPostgresDuckDBTypemod(*it_types);
 		oss << format_type_with_typemod(postgres_type, typemod);
 		oss << " AS " << duckdb::KeywordHelper::WriteQuoted(*it_names, '"');
 	}
@@ -653,7 +653,7 @@ CreatePgTableString(duckdb::CreateTableInfo &info, bool is_default_db) {
 
 	bool first = true;
 	for (auto &column : info.columns.Logical()) {
-		Oid postgres_type = GetPostgresDuckDBType(column.Type());
+		Oid postgres_type = pgddb::GetPostgresDuckDBType(column.Type());
 		if (postgres_type == InvalidOid) {
 
 			continue;
@@ -667,7 +667,7 @@ CreatePgTableString(duckdb::CreateTableInfo &info, bool is_default_db) {
 
 		oss << duckdb::KeywordHelper::WriteQuoted(column.Name(), '"');
 		oss << " ";
-		int32_t typemod = GetPostgresDuckDBTypemod(column.Type());
+		int32_t typemod = pgddb::GetPostgresDuckDBTypemod(column.Type());
 		oss << format_type_with_typemod(postgres_type, typemod);
 	}
 

@@ -4,7 +4,7 @@
 
 #include "pgddb/catalog/pgddb_transaction.hpp"
 #include "pgddb/scan/postgres_scan.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"
 
 extern "C" {
@@ -36,7 +36,7 @@ extern "C" {
 #include "pgduckdb/pgduckdb_node.hpp"
 #include "pgddb/vendor/pg_list.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 
 duckdb::unique_ptr<duckdb::PreparedStatement>
 DuckdbPrepare(const Query *query, const char *explain_prefix) {
@@ -72,7 +72,7 @@ CreatePlan(Query *query, bool throw_error) {
 	auto &prepared_result_types = prepared_query->GetTypes();
 
 	for (size_t i = 0; i < prepared_result_types.size(); i++) {
-		Oid postgresColumnOid = pgduckdb::GetPostgresDuckDBType(prepared_result_types[i], throw_error);
+		Oid postgresColumnOid = pgddb::GetPostgresDuckDBType(prepared_result_types[i], throw_error);
 
 		if (!OidIsValid(postgresColumnOid)) {
 			return nullptr;
@@ -88,7 +88,7 @@ CreatePlan(Query *query, bool throw_error) {
 		}
 
 		typtup = (Form_pg_type)GETSTRUCT(tp);
-		typtup->typtypmod = pgduckdb::GetPostgresDuckDBTypemod(prepared_result_types[i]);
+		typtup->typtypmod = pgddb::GetPostgresDuckDBTypemod(prepared_result_types[i]);
 
 		/*
 		 * We hardcode varno 1 here, because our final plan will only have a

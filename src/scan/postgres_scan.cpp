@@ -10,7 +10,7 @@
 
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/scan/postgres_table_reader.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgddb/pgddb_utils.hpp"
 #include "pgddb/pg/memory.hpp"
 #include "pgddb/pg/relations.hpp"

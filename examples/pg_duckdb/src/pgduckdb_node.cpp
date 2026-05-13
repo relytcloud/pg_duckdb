@@ -5,7 +5,7 @@
 
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgduckdb/vendor/pg_explain.hpp"
 #include "pgddb/pg/explain.hpp"
 
@@ -133,7 +133,7 @@ Duckdb_BeginCustomScan_Cpp(CustomScanState *cscanstate, EState *estate, int /*ef
 		}
 
 		for (size_t i = 0; i < prepared_result_types.size(); i++) {
-			Oid postgres_column_oid = pgduckdb::GetPostgresDuckDBType(prepared_result_types[i], true);
+			Oid postgres_column_oid = pgddb::GetPostgresDuckDBType(prepared_result_types[i], true);
 
 			TargetEntry *target_entry =
 			    list_nth_node(TargetEntry, duckdb_scan_state->custom_scan->custom_scan_tlist, i);
@@ -185,7 +185,7 @@ ExecuteQuery(DuckdbScanState *state) {
 		if (pg_param->isnull) {
 			duckdb_param = duckdb::Value();
 		} else if (OidIsValid(pg_param->ptype)) {
-			duckdb_param = pgduckdb::ConvertPostgresParameterToDuckValue(pg_param->value, pg_param->ptype);
+			duckdb_param = pgddb::ConvertPostgresParameterToDuckValue(pg_param->value, pg_param->ptype);
 		} else {
 			std::ostringstream oss;
 			oss << "parameter '" << i << "' has an invalid type (" << pg_param->ptype << ") during query execution";
@@ -292,7 +292,7 @@ Duckdb_ExecCustomScan_Cpp(CustomScanState *node) {
 				slot->tts_isnull[col] = true;
 			} else {
 				slot->tts_isnull[col] = false;
-				if (!pgduckdb::ConvertDuckToPostgresValue(slot, value, col)) {
+				if (!pgddb::ConvertDuckToPostgresValue(slot, value, col)) {
 					throw duckdb::ConversionException("Value conversion failed");
 				}
 			}

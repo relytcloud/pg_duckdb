@@ -4,8 +4,8 @@ extern "C" {
 #include "postgres.h"
 }
 
-namespace pgduckdb {
+namespace pgddb {
 
 Datum DetoastPostgresDatum(struct varlena *value, bool *should_free);
 
-} // namespace pgduckdb
+} // namespace pgddb

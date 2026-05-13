@@ -5,17 +5,13 @@
 #include "pgddb/logger.hpp"
 #include "pgddb/pg/relations.hpp"
 #include "pgddb/pgddb_process_lock.hpp"
-#include "pgduckdb/pgduckdb_types.hpp" // ConvertPostgresToDuckColumnType
+#include "pgddb/pgddb_types.hpp" // ConvertPostgresToDuckColumnType
 
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
 #include "pgddb/utility/cpp_only_file.hpp" // Must be last include.
 
 namespace pgddb {
-
-// Bring pgduckdb's free functions and globals into scope while sibling
-// pieces still live in pgduckdb::. Future iterations shrink this.
-using namespace ::pgduckdb;
 
 PostgresTable::PostgresTable(duckdb::Catalog &_catalog, duckdb::SchemaCatalogEntry &_schema,
                              duckdb::CreateTableInfo &_info, Relation _rel, Cardinality _cardinality,

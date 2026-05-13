@@ -1,6 +1,6 @@
 #include "duckdb.hpp"
 
-#include "pgduckdb/pgduckdb_types.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgddb/pgddb_utils.hpp"
 
 extern "C" {
@@ -23,7 +23,7 @@ extern "C" {
 }
 
 #include "pgddb/pgddb_process_lock.hpp"
-#include "pgduckdb/pgduckdb_detoast.hpp"
+#include "pgddb/pgddb_detoast.hpp"
 
 /*
  * Following functions are direct logic found in postgres code but for duckdb execution they are needed to be thread
@@ -32,7 +32,7 @@ extern "C" {
  * performances.
  */
 
-namespace pgduckdb {
+namespace pgddb {
 
 struct varlena *
 PglzDecompressDatum(const struct varlena *value) {
@@ -180,4 +180,4 @@ DetoastPostgresDatum(struct varlena *attr, bool *should_free) {
 	return reinterpret_cast<Datum>(toasted_value);
 }
 
-} // namespace pgduckdb
+} // namespace pgddb
