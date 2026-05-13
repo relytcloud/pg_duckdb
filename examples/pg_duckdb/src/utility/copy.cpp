@@ -26,7 +26,7 @@ extern "C" {
 #include "utils/rls.h"
 
 #include "pgddb/vendor/pg_list.hpp"
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 }
 
 /*

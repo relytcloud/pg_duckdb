@@ -8,8 +8,10 @@
 
 PGDDB_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 PGDDB_INCLUDE := -I$(PGDDB_DIR)/include
-PGDDB_SRCS := $(wildcard $(PGDDB_DIR)/src/*.cpp $(PGDDB_DIR)/src/*/*.cpp)
-PGDDB_OBJS := $(PGDDB_SRCS:.cpp=.o)
+PGDDB_CPP_SRCS := $(wildcard $(PGDDB_DIR)/src/*.cpp $(PGDDB_DIR)/src/*/*.cpp)
+PGDDB_C_SRCS := $(wildcard $(PGDDB_DIR)/src/*.c $(PGDDB_DIR)/src/*/*.c)
+PGDDB_SRCS := $(PGDDB_CPP_SRCS) $(PGDDB_C_SRCS)
+PGDDB_OBJS := $(PGDDB_CPP_SRCS:.cpp=.o) $(PGDDB_C_SRCS:.c=.o)
 
 examples/%:
 	$(MAKE) -C $(@D) $(@F)

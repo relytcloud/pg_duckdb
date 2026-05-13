@@ -32,7 +32,7 @@ extern "C" {
 #include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pgduckdb_background_worker.hpp"
 #include "pgduckdb/utility/copy.hpp"
-#include "pgduckdb/vendor/pg_explain.hpp"
+#include "pgddb/vendor/pg_explain.hpp"
 #include "pgddb/vendor/pg_list.hpp"
 #include "pgduckdb/pgduckdb_node.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"

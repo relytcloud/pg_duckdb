@@ -25,7 +25,7 @@ extern "C" {
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 
 #if PG_VERSION_NUM >= 180000
 #include "executor/executor.h"

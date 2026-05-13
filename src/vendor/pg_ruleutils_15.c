@@ -69,14 +69,14 @@
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
 #include "utils/rel.h"
-#include "pgduckdb/vendor/pg_ruleutils.h"
+#include "pgddb/vendor/pg_ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 #include "utils/varlena.h"
 #include "utils/xml.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 
 #include "pgddb/utility/rename_ruleutils.h"
 

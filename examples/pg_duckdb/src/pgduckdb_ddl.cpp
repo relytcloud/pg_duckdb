@@ -36,8 +36,8 @@ extern "C" {
 #include "rewrite/rewriteHandler.h"
 #include "utils/ruleutils.h"
 
-#include "pgduckdb/vendor/pg_ruleutils.h"
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/vendor/pg_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 }
 
 #include "pgduckdb/pgduckdb_guc.hpp"

@@ -27,7 +27,7 @@ extern "C" {
 #include "executor/tuptable.h"
 #include "utils/syscache.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 }
 
 extern "C" {

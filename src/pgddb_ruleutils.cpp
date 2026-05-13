@@ -33,8 +33,8 @@ extern "C" {
 #include "utils/syscache.h"
 #include "storage/lockdefs.h"
 
-#include "pgduckdb/vendor/pg_ruleutils.h"
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/vendor/pg_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 #include "pgddb/vendor/pg_list.hpp"
 }
 

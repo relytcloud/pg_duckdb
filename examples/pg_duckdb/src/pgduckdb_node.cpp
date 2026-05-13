@@ -6,7 +6,7 @@
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgduckdb/pgduckdb_planner.hpp"
 #include "pgddb/pgddb_types.hpp"
-#include "pgduckdb/vendor/pg_explain.hpp"
+#include "pgddb/vendor/pg_explain.hpp"
 #include "pgddb/pg/explain.hpp"
 
 extern "C" {
