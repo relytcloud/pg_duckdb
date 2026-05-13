@@ -1,51 +1,69 @@
 #include "duckdb.hpp"
-
-#include "pgddb/pg/locale.hpp"
-#include "pgddb/pg/relations.hpp"
 #include "pgddb/pg/string_utils.hpp"
-#include "pgddb/pgddb_duckdb.hpp"
 #include "pgddb/pgddb_types.hpp"
+#include "pgduckdb/pgduckdb_ddl.hpp"
+#include "pgddb/pg/relations.hpp"
+#include "pgddb/pg/locale.hpp"
 
 extern "C" {
 #include "postgres.h"
 
-#include "pgddb/pgddb_ruleutils.h"
-
 #include "access/relation.h"
 #include "access/htup_details.h"
 #include "catalog/pg_class.h"
-#include "catalog/pg_collation.h"
 #include "catalog/heap.h"
+#include "catalog/pg_collation.h"
+#include "commands/dbcommands.h"
 #include "commands/tablecmds.h"
-#include "lib/stringinfo.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/parsenodes.h"
+#include "lib/stringinfo.h"
 #include "parser/parsetree.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/lsyscache.h"
-#include "utils/rel.h"
 #include "utils/relcache.h"
+#include "utils/rel.h"
+#include "nodes/print.h"
+#include "utils/rls.h"
 #include "utils/syscache.h"
+#include "storage/lockdefs.h"
 
 #include "pgddb/vendor/pg_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 #include "pgddb/vendor/pg_list.hpp"
 }
 
 #include "pgduckdb/pgduckdb.h"
-#include "pgduckdb/pgduckdb_ddl.hpp"
-#include "pgduckdb/pgduckdb_metadata_cache.hpp"
-#include "pgduckdb/pgduckdb_ruleutils.hpp"
 #include "pgduckdb/pgduckdb_table_am.hpp"
+#include "pgddb/pgddb_duckdb.hpp"
+#include "pgduckdb/pgduckdb_metadata_cache.hpp"
 #include "pgduckdb/pgduckdb_userdata_cache.hpp"
+#include "pgduckdb/pgduckdb_ruleutils.hpp"
 
-/* ------------------------------------------------------------------------
- * pg_duckdb composite-type detection helpers (file-local). The hook impls
- * below use these to identify the pgduckdb-specific Oids.
- * ------------------------------------------------------------------------ */
+extern "C" {
+
+static char *
+pgduckdb_function_name(Oid function_oid, bool *use_variadic_p) {
+	if (!pgduckdb::IsDuckdbOnlyFunction(function_oid)) {
+		return nullptr;
+	}
+
+	/*
+	 * DuckDB currently doesn't support variadic functions, so we can just
+	 * always set this pointer to false.
+	 */
+	if (use_variadic_p) {
+		*use_variadic_p = false;
+	}
+
+	auto func_name = get_func_name(function_oid);
+	return psprintf("system.main.%s", quote_identifier(func_name));
+}
 
 static bool
 pgduckdb_is_unresolved_type(Oid type_oid) {
@@ -57,153 +75,228 @@ pgduckdb_is_duckdb_row(Oid type_oid) {
 	return type_oid == pgduckdb::DuckdbRowOid();
 }
 
+/*
+ * We never want to show some of our unresolved types in the DuckDB query.
+ * These types only exist to make the Postgres parser and its type resolution
+ * happy. DuckDB can simply figure out the correct type itself without an
+ * explicit cast.
+ */
 static bool
 pgduckdb_is_fake_type(Oid type_oid) {
-	if (pgduckdb_is_unresolved_type(type_oid)) return true;
-	if (pgduckdb_is_duckdb_row(type_oid)) return true;
-	if (pgduckdb::DuckdbJsonOid() == type_oid) return true;
+	if (pgduckdb_is_unresolved_type(type_oid)) {
+		return true;
+	}
+
+	if (pgduckdb_is_duckdb_row(type_oid)) {
+		return true;
+	}
+
+	if (pgduckdb::DuckdbJsonOid() == type_oid) {
+		return true;
+	}
+
 	return false;
 }
 
 static bool
 pgduckdb_is_duckdb_subscript_type(Oid type_oid) {
-	if (pgduckdb_is_unresolved_type(type_oid)) return true;
-	if (pgduckdb_is_duckdb_row(type_oid)) return true;
-	if (pgduckdb::DuckdbStructOid() == type_oid) return true;
-	if (pgduckdb::DuckdbMapOid() == type_oid) return true;
+	if (pgduckdb_is_unresolved_type(type_oid)) {
+		return true;
+	}
+
+	if (pgduckdb_is_duckdb_row(type_oid)) {
+		return true;
+	}
+
+	if (pgduckdb::DuckdbStructOid() == type_oid) {
+		return true;
+	}
+
+	if (pgduckdb::DuckdbMapOid() == type_oid) {
+		return true;
+	}
+
 	return false;
-}
-
-/* ------------------------------------------------------------------------
- * Prev-hook slots and hook impls. Each impl checks the pg_duckdb case
- * first and falls through to prev_hook (or sensible default) otherwise.
- * ------------------------------------------------------------------------ */
-
-static pgddb_function_name_hook_t prev_pgddb_function_name_hook = nullptr;
-static pgddb_is_fake_type_hook_t prev_pgddb_is_fake_type_hook = nullptr;
-static pgddb_var_is_row_hook_t prev_pgddb_var_is_row_hook = nullptr;
-static pgddb_subscript_var_hook_t prev_pgddb_subscript_var_hook = nullptr;
-static pgddb_func_returns_row_hook_t prev_pgddb_func_returns_row_hook = nullptr;
-static pgddb_replace_subquery_with_view_hook_t prev_pgddb_replace_subquery_with_view_hook = nullptr;
-static pgddb_show_type_hook_t prev_pgddb_show_type_hook = nullptr;
-static pgddb_reconstruct_star_step_hook_t prev_pgddb_reconstruct_star_step_hook = nullptr;
-static pgddb_strip_first_subscript_hook_t prev_pgddb_strip_first_subscript_hook = nullptr;
-static pgddb_subscript_has_custom_alias_hook_t prev_pgddb_subscript_has_custom_alias_hook = nullptr;
-static pgddb_write_row_refname_hook_t prev_pgddb_write_row_refname_hook = nullptr;
-static pgddb_db_and_schema_hook_t prev_pgddb_db_and_schema_hook = nullptr;
-
-static char *
-pgduckdb_function_name(Oid function_oid, bool *use_variadic_p) {
-	if (!pgduckdb::IsDuckdbOnlyFunction(function_oid)) {
-		return prev_pgddb_function_name_hook ? prev_pgddb_function_name_hook(function_oid, use_variadic_p) : nullptr;
-	}
-
-	/* DuckDB doesn't support variadic functions; just set the flag false. */
-	if (use_variadic_p) {
-		*use_variadic_p = false;
-	}
-
-	auto func_name = get_func_name(function_oid);
-	return psprintf("system.main.%s", quote_identifier(func_name));
-}
-
-static bool
-pgduckdb_is_fake_type_impl(Oid type_oid) {
-	if (pgduckdb_is_fake_type(type_oid)) return true;
-	return prev_pgddb_is_fake_type_hook ? prev_pgddb_is_fake_type_hook(type_oid) : false;
 }
 
 static bool
 pgduckdb_var_is_duckdb_row(Var *var) {
-	if (var && pgduckdb_is_duckdb_row(var->vartype)) return true;
-	return prev_pgddb_var_is_row_hook ? prev_pgddb_var_is_row_hook(var) : false;
+	if (!var) {
+		return false;
+	}
+	return pgduckdb_is_duckdb_row(var->vartype);
 }
 
 static bool
 pgduckdb_func_returns_duckdb_row(RangeTblFunction *rtfunc) {
-	if (rtfunc && IsA(rtfunc->funcexpr, FuncExpr)) {
-		FuncExpr *func_expr = castNode(FuncExpr, rtfunc->funcexpr);
-		if (pgduckdb_is_duckdb_row(func_expr->funcresulttype)) return true;
+	if (!rtfunc) {
+		return false;
 	}
-	return prev_pgddb_func_returns_row_hook ? prev_pgddb_func_returns_row_hook(rtfunc) : false;
-}
 
-static Var *
-pgduckdb_duckdb_subscript_var(Expr *expr) {
-	if (expr && IsA(expr, SubscriptingRef)) {
-		SubscriptingRef *subscript = (SubscriptingRef *)expr;
-		if (IsA(subscript->refexpr, Var)) {
-			Var *refexpr = (Var *)subscript->refexpr;
-			if (pgduckdb_is_duckdb_subscript_type(refexpr->vartype)) {
-				return refexpr;
-			}
-		}
+	if (!IsA(rtfunc->funcexpr, FuncExpr)) {
+		return false;
 	}
-	return prev_pgddb_subscript_var_hook ? prev_pgddb_subscript_var_hook(expr) : nullptr;
+
+	FuncExpr *func_expr = castNode(FuncExpr, rtfunc->funcexpr);
+
+	return pgduckdb_is_duckdb_row(func_expr->funcresulttype);
 }
 
 /*
- * Try to detect the start of a run of Vars in the target list that should be
- * reconstructed as a star (SELECT *). pg_duckdb expands a duckdb.row Var into
- * a sequence of Vars during planning; we put a star back in the deparsed SQL.
+ * Returns NULL if the expression is a subscript on a duckdb specific type.
+ * Returns the Var of the duckdb row if it is.
+ */
+static Var *
+pgduckdb_duckdb_subscript_var(Expr *expr) {
+	if (!expr) {
+		return NULL;
+	}
+
+	if (!IsA(expr, SubscriptingRef)) {
+		return NULL;
+	}
+
+	SubscriptingRef *subscript = (SubscriptingRef *)expr;
+
+	if (!IsA(subscript->refexpr, Var)) {
+		return NULL;
+	}
+
+	Var *refexpr = (Var *)subscript->refexpr;
+
+	if (!pgduckdb_is_duckdb_subscript_type(refexpr->vartype)) {
+		return NULL;
+	}
+
+	return refexpr;
+}
+
+/*
+ * pgduckdb_check_for_star_start tries to figure out if this is tle_cell
+ * contains a Var that is the start of a run of Vars that should be
+ * reconstructed as a star. If that's the case it sets the varno_star and
+ * varattno_star of the ctx.
  */
 static void
 pgduckdb_check_for_star_start(StarReconstructionContext *ctx, ListCell *tle_cell) {
 	TargetEntry *first_tle = (TargetEntry *)lfirst(tle_cell);
 
-	if (!IsA(first_tle->expr, Var)) return;
+	if (!IsA(first_tle->expr, Var)) {
+		/* Not a Var so we're not at the start of a run of Vars. */
+		return;
+	}
 
 	Var *first_var = (Var *)first_tle->expr;
 
-	if (first_var->varattno != 1) return;
+	if (first_var->varattno != 1) {
+		/* If we don't have varattno 1, then we are not at a run of Vars */
+		return;
+	}
 
+	/*
+	 * We found a Var that could potentially be the first of a run of Vars for
+	 * which we have to reconstruct the star. To check if this is indeed the
+	 * case we see if we can find a duckdb.row in this list of Vars.
+	 */
 	int varno = first_var->varno;
 	int varattno = first_var->varattno;
 
 	do {
 		TargetEntry *tle = (TargetEntry *)lfirst(tle_cell);
 
-		if (!IsA(tle->expr, Var)) return;
+		if (!IsA(tle->expr, Var)) {
+			/*
+			 * We found the end of this run of Vars, by finding something else
+			 * than a Var.
+			 */
+			return;
+		}
 
 		Var *var = (Var *)tle->expr;
 
-		if (var->varno != varno) return;
-		if (var->varattno != varattno) return;
+		if (var->varno != varno) {
+			/* A Var from a different RTE */
+			return;
+		}
 
-		if (var && pgduckdb_is_duckdb_row(var->vartype)) {
+		if (var->varattno != varattno) {
+			/* Not a consecutive Var */
+			return;
+		}
+		if (pgduckdb_var_is_duckdb_row(var)) {
+			/*
+			 * If we have a duckdb.row, then we found a run of Vars that we
+			 * have to reconstruct the star for.
+			 */
+
 			ctx->varno_star = varno;
 			ctx->varattno_star = first_var->varattno;
 			ctx->added_current_star = false;
 			return;
 		}
 
+		/* Look for the next Var in the run */
 		varattno++;
 	} while ((tle_cell = lnext(ctx->target_list, tle_cell)));
 }
 
+/*
+ * In our DuckDB queries we sometimes want to use "SELECT *", when selecting
+ * from a function like read_parquet. That way DuckDB can figure out the actual
+ * columns that it should return. Sadly Postgres expands the * character from
+ * the original query to a list of columns. So we need to put a star, any time
+ * we want to replace duckdb.row columns with a "*" in the duckdb query.
+ *
+ * Since the original "*" might expand to many columns we need to remove all of
+ * those, when putting a "*" back. To do so we try to find a runs of Vars from
+ * the same FROM entry, aka RangeTableEntry (RTE) that we expect were created
+ * with a *.
+ *
+ * This function returns true if we should skip writing this tle_cell to the
+ * DuckDB query because it is part of a run of Vars that will be reconstructed
+ * as a star.
+ */
 static bool
 pgduckdb_reconstruct_star_step(StarReconstructionContext *ctx, ListCell *tle_cell) {
+	/* Detect start of a Var run that should be reconstructed to a star */
 	pgduckdb_check_for_star_start(ctx, tle_cell);
 
+	/*
+	 * If we're not currently reconstructing a star we don't need to do
+	 * anything.
+	 */
 	if (!ctx->varno_star) {
-		return prev_pgddb_reconstruct_star_step_hook
-		           ? prev_pgddb_reconstruct_star_step_hook(ctx, tle_cell)
-		           : false;
+		return false;
 	}
 
 	TargetEntry *tle = (TargetEntry *)lfirst(tle_cell);
 
+	/*
+	 * Find out if this target entry is the next element in the run of Vars for
+	 * the star we're currently reconstructing.
+	 */
 	if (tle->expr && IsA(tle->expr, Var)) {
 		Var *var = castNode(Var, tle->expr);
 
 		if (var->varno == ctx->varno_star && var->varattno == ctx->varattno_star) {
+			/*
+			 * We're still in the run of Vars, increment the varattno to look
+			 * for the next Var on the next call.
+			 */
 			ctx->varattno_star++;
 
+			/* If we already added star we skip writing this target entry */
 			if (ctx->added_current_star) {
 				return true;
 			}
 
-			if (!(var && pgduckdb_is_duckdb_row(var->vartype))) {
+			/*
+			 * If it's not a duckdb row we skip this target entry too. The way
+			 * we add a single star is by expanding the first duckdb.row torget
+			 * entry, which we've defined to expand to a star. So we need to
+			 * skip any non duckdb.row Vars that precede the first duckdb.row.
+			 */
+			if (!pgduckdb_var_is_duckdb_row(var)) {
 				return true;
 			}
 
@@ -212,6 +305,11 @@ pgduckdb_reconstruct_star_step(StarReconstructionContext *ctx, ListCell *tle_cel
 		}
 	}
 
+	/*
+	 * If it was not, that means we've successfully expanded this star and we
+	 * should start looking for the next star start. So reset all the state
+	 * used for this star reconstruction.
+	 */
 	ctx->varno_star = 0;
 	ctx->varattno_star = 0;
 	ctx->added_current_star = false;
@@ -223,9 +321,8 @@ static bool
 pgduckdb_replace_subquery_with_view(Query *query, StringInfo buf) {
 	FuncExpr *func_expr = pgduckdb::GetDuckdbViewExprFromQuery(query);
 	if (!func_expr) {
-		return prev_pgddb_replace_subquery_with_view_hook
-		           ? prev_pgddb_replace_subquery_with_view_hook(query, buf)
-		           : false;
+		/* Not a duckdb.view query, so we don't need to do anything */
+		return false;
 	}
 
 	int i = 0;
@@ -260,22 +357,29 @@ pgduckdb_replace_subquery_with_view(Query *query, StringInfo buf) {
 }
 
 /*
- * Return -1 if the Const has a "fake" pg_duckdb type, so get_const_expr
- * never shows the type cast.
+ * A wrapper around pgduckdb_is_fake_type that returns -1 if the type of the
+ * Const is fake, because that's the type of value that get_const_expr requires
+ * in its showtype variable to never show the type.
  */
 static int
 pgduckdb_show_type(Const *constval, int original_showtype) {
 	if (pgduckdb_is_fake_type(constval->consttype)) {
 		return -1;
 	}
-	return prev_pgddb_show_type_hook ? prev_pgddb_show_type_hook(constval, original_showtype) : original_showtype;
+	return original_showtype;
 }
 
 static bool
 pgduckdb_subscript_has_custom_alias(Plan *plan, List *rtable, Var *subscript_var, char *colname) {
+	/* The first bit of this logic is taken from get_variable() */
 	int varno;
 	int varattno;
 
+	/*
+	 * If we have a syntactic referent for the Var, and we're working from a
+	 * parse tree, prefer to use the syntactic referent.  Otherwise, fall back
+	 * on the semantic referent.  (See comments in get_variable().)
+	 */
 	if (subscript_var->varnosyn > 0 && plan == NULL) {
 		varno = subscript_var->varnosyn;
 		varattno = subscript_var->varattnosyn;
@@ -285,31 +389,27 @@ pgduckdb_subscript_has_custom_alias(Plan *plan, List *rtable, Var *subscript_var
 	}
 
 	RangeTblEntry *rte = rt_fetch(varno, rtable);
+
+	/* Custom code starts here */
 	char *original_column = strVal(list_nth(rte->eref->colnames, varattno - 1));
 
-	if (strcmp(original_column, colname) != 0) return true;
-	return prev_pgddb_subscript_has_custom_alias_hook
-	           ? prev_pgddb_subscript_has_custom_alias_hook(plan, rtable, subscript_var, colname)
-	           : false;
+	return strcmp(original_column, colname) != 0;
 }
 
 /*
- * Rewrite r['mycolumn'] into r.mycolumn for subscript expressions on
- * duckdb.row Vars, so DuckDB produces nicer column names.
+ * Subscript expressions that index into the duckdb.row type need to be changed
+ * to regular column references in the DuckDB query. The main reason we do this
+ * is so that DuckDB generates nicer column names, i.e. without the square
+ * brackets: "mycolumn" instead of "r['mycolumn']"
  */
 static SubscriptingRef *
 pgduckdb_strip_first_subscript(SubscriptingRef *sbsref, StringInfo buf) {
 	if (!IsA(sbsref->refexpr, Var)) {
-		return prev_pgddb_strip_first_subscript_hook
-		           ? prev_pgddb_strip_first_subscript_hook(sbsref, buf)
-		           : sbsref;
+		return sbsref;
 	}
 
-	Var *refvar = (Var *)sbsref->refexpr;
-	if (!pgduckdb_is_duckdb_row(refvar->vartype)) {
-		return prev_pgddb_strip_first_subscript_hook
-		           ? prev_pgddb_strip_first_subscript_hook(sbsref, buf)
-		           : sbsref;
+	if (!pgduckdb_var_is_duckdb_row((Var *)sbsref->refexpr)) {
+		return sbsref;
 	}
 
 	Assert(sbsref->refupperindexpr);
@@ -322,7 +422,14 @@ pgduckdb_strip_first_subscript(SubscriptingRef *sbsref, StringInfo buf) {
 
 	appendStringInfo(buf, ".%s", quote_identifier(extval));
 
+	/*
+	 * If there are any additional subscript expressions we should output them.
+	 * Subscripts can be used in duckdb to index into arrays or json objects.
+	 * It's fine if this results in an empty List, because printSubscripts
+	 * handles that case correctly.
+	 */
 	SubscriptingRef *shorter_sbsref = (SubscriptingRef *)copyObjectImpl(sbsref);
+	/* strip the first subscript from the list */
 	shorter_sbsref->refupperindexpr = list_delete_first(shorter_sbsref->refupperindexpr);
 	if (shorter_sbsref->reflowerindexpr) {
 		shorter_sbsref->reflowerindexpr = list_delete_first(shorter_sbsref->reflowerindexpr);
@@ -330,40 +437,42 @@ pgduckdb_strip_first_subscript(SubscriptingRef *sbsref, StringInfo buf) {
 	return shorter_sbsref;
 }
 
+/*
+ * Writes the refname to the buf in a way that results in the correct output
+ * for the duckdb.row type.
+ *
+ * Returns the "attname" that should be passed back to the caller of
+ * get_variable().
+ */
 static char *
 pgduckdb_write_row_refname(StringInfo buf, char *refname, bool is_top_level) {
 	appendStringInfoString(buf, quote_identifier(refname));
 
 	if (is_top_level) {
 		/*
-		 * duckdb.row at the top of a target list expands to r.* so DuckDB
-		 * unpacks the STRUCT into all columns. NULL means "no attname".
+		 * If the duckdb.row is at the top level target list of a select, then
+		 * we want to generate r.*, to unpack all the columns instead of
+		 * returning a STRUCT from the query.
+		 *
+		 * Since we use .* there is no attname.
 		 */
 		appendStringInfoString(buf, ".*");
 		return NULL;
 	}
 
+	/*
+	 * In any other case, we want to simply use the alias of the TargetEntry.
+	 */
 	return refname;
 }
 
-/* ------------------------------------------------------------------------
- * db_and_schema policy: maps a PG schema name plus the relation's table-AM
- * name into a (duckdb_db, duckdb_schema) pair. pg_duckdb's policy:
- *   - "duckdb" table-AM and "public" schema -> default DB + "main"
- *   - "duckdb" table-AM and "pg_temp" -> "pg_temp" + "main"
- *   - "duckdb" table-AM and a "ddb$<db>[$<schema>]" schema -> MotherDuck routing
- *   - anything else with a non-NULL table-AM name -> table-AM name as DB
- *   - NULL table-AM name -> "pgduckdb" + schema name
- * ------------------------------------------------------------------------ */
-
-extern "C" List *
+/*
+ * Given a postgres schema name, this returns a list of two elements: the first
+ * is the DuckDB database name and the second is the duckdb schema name. These
+ * are not escaped yet.
+ */
+List *
 pgduckdb_db_and_schema(const char *postgres_schema_name, const char *duckdb_table_am_name) {
-	/*
-	 * Libpgddb's pgddb_relation_name passes the actual AM name (e.g. "heap")
-	 * here. The original DuckdbTableAmGetName only signaled the duckdb AM,
-	 * so anything else (heap, btree, ...) routes to the default "pgduckdb"
-	 * database + verbatim schema, same as a NULL AM name.
-	 */
 	if (duckdb_table_am_name == nullptr || strcmp("duckdb", duckdb_table_am_name) != 0) {
 		return list_make2((void *)"pgduckdb", (void *)postgres_schema_name);
 	}
@@ -373,10 +482,12 @@ pgduckdb_db_and_schema(const char *postgres_schema_name, const char *duckdb_tabl
 	}
 
 	if (strcmp("public", postgres_schema_name) == 0) {
+		/* Use the "main" schema in DuckDB for tables in the public schema in Postgres */
 		auto dbname = pgddb::DuckDBManager::Get().GetDefaultDBName().c_str();
 		return list_make2((void *)dbname, (void *)"main");
 	}
 
+	/* These are MotherDuck tables, so we need credentials to access them */
 	if (!pgduckdb::IsMotherDuckEnabled()) {
 		ereport(ERROR,
 		        (errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
@@ -431,37 +542,19 @@ pgduckdb_db_and_schema(const char *postgres_schema_name, const char *duckdb_tabl
 	return list_make2(db_name.data, schema_name.data);
 }
 
-static List *
-pgduckdb_db_and_schema_hook_impl(const char *postgres_schema_name, const char *duckdb_table_am_name) {
-	return pgduckdb_db_and_schema(postgres_schema_name, duckdb_table_am_name);
-}
-
-/* ------------------------------------------------------------------------
- * DDL deparsers: CREATE TABLE / CREATE VIEW / ALTER TABLE / RENAME.
- * These have pg_duckdb-specific policy checks (MotherDuck owner, duckdb
- * table-AM) and are exposed via pgduckdb_ruleutils.hpp for pgduckdb_ddl.cpp.
- * ------------------------------------------------------------------------ */
-
 /*
- * Take a raw CHECK constraint expression and convert it to a cooked format
- * ready for storage. Vendored from src/backend/catalog/heap.c.
+ * pgduckdb_get_tabledef returns the definition of a given table. This
+ * definition includes table's schema, default column values, not null and check
+ * constraints. The definition does not include constraints that trigger index
+ * creations; specifically, unique and primary key constraints are excluded.
+ *
+ * TODO: Add support indexes, primary keys and unique constraints.
+ *
+ * This function is inspired by the pg_get_tableschemadef_string function in
+ * the following patch that I (Jelte) submitted to Postgres in 2023:
+ * https://www.postgresql.org/message-id/CAGECzQSqdDHO_s8=CPTb2+4eCLGUscdh=KjYGTunhvrwcC7ZSQ@mail.gmail.com
  */
-static Node *
-cookConstraint(ParseState *pstate, Node *raw_constraint, char *relname) {
-	Node *expr;
-
-	expr = transformExpr(pstate, raw_constraint, EXPR_KIND_CHECK_CONSTRAINT);
-	expr = coerce_to_boolean(pstate, expr, "CHECK");
-	assign_expr_collations(pstate, expr);
-
-	if (list_length(pstate->p_rtable) != 1)
-		ereport(ERROR, (errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-		                errmsg("only table \"%s\" can be referenced in check constraint", relname)));
-
-	return expr;
-}
-
-extern "C" char *
+char *
 pgduckdb_get_tabledef(Oid relation_oid) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgddb_relation_name(relation_oid);
@@ -503,6 +596,11 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 
 	List *relation_context = pgddb_deparse_context_for(relation_name, relation_oid);
 
+	/*
+	 * Iterate over the table's columns. If a particular column is not dropped
+	 * and is not inherited from another table, print the column's name and
+	 * its formatted type.
+	 */
 	TupleDesc tuple_descriptor = RelationGetDescr(relation);
 	TupleConstr *tuple_constraints = tuple_descriptor->constr;
 	AttrDefault *default_value_list = tuple_constraints ? tuple_constraints->defval : NULL;
@@ -518,6 +616,12 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 
 		const char *column_name = NameStr(column->attname);
 
+		/*
+		 * Check that this type is known by DuckDB, and throw the appropriate
+		 * error otherwise. This is particularly important for NUMERIC without
+		 * precision specified. Because that means something very different in
+		 * Postgres
+		 */
 		auto duck_type = pgddb::ConvertPostgresToDuckColumnType(column);
 		pgddb::GetPostgresDuckDBType(duck_type, true);
 
@@ -539,6 +643,7 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 			elog(ERROR, "Identity columns are not supported in DuckDB");
 		}
 
+		/* if this column has a default value, append the default value */
 		if (column->atthasdef) {
 			Assert(tuple_constraints != NULL);
 			Assert(default_value_list != NULL);
@@ -549,10 +654,21 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 			Assert(default_value->adnum == (i + 1));
 			Assert(default_value_index <= tuple_constraints->num_defval);
 
+			/*
+			 * convert expression to node tree, and prepare deparse
+			 * context
+			 */
 			Node *default_node = (Node *)stringToNode(default_value->adbin);
 
+			/* deparse default value string */
 			char *default_string = pgddb_deparse_expression(default_node, relation_context, false, false);
 
+			/*
+			 * DuckDB does not support STORED generated columns, it does
+			 * support VIRTUAL generated columns though. Howevever, Postgres
+			 * currently does not support those, so for now there's no overlap
+			 * in generated column support between the two databases.
+			 */
 			if (!column->attgenerated) {
 				appendStringInfo(&buffer, " DEFAULT %s", default_string);
 			} else if (column->attgenerated == ATTRIBUTE_GENERATED_STORED) {
@@ -562,26 +678,41 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 			}
 		}
 
+		/* if this column has a not null constraint, append the constraint */
 		if (column->attnotnull) {
 			appendStringInfoString(&buffer, " NOT NULL");
 		}
 
+		/*
+		 * XXX: default collation is actually probably not supported by
+		 * DuckDB, unless it's C or POSIX. But failing unless people
+		 * provide C or POSIX seems pretty annoying. How should we handle
+		 * this?
+		 */
 		Oid collation = column->attcollation;
 		if (collation != InvalidOid && collation != DEFAULT_COLLATION_OID && !pgddb::pg::IsCLocale(collation)) {
 			elog(ERROR, "DuckDB does not support column collations");
 		}
 	}
 
+	/*
+	 * Now check if the table has any constraints. If it does, set the number
+	 * of check constraints here. Then iterate over all check constraints and
+	 * print them.
+	 */
 	AttrNumber constraint_count = tuple_constraints ? tuple_constraints->num_check : 0;
 	ConstrCheck *check_constraint_list = tuple_constraints ? tuple_constraints->check : NULL;
 
 	for (AttrNumber i = 0; i < constraint_count; i++) {
 		ConstrCheck *check_constraint = &(check_constraint_list[i]);
 
+		/* convert expression to node tree, and prepare deparse context */
 		Node *check_node = (Node *)stringToNode(check_constraint->ccbin);
 
+		/* deparse check constraint string */
 		char *check_string = pgddb_deparse_expression(check_node, relation_context, false, false);
 
+		/* if an attribute or constraint has been printed, format properly */
 		if (first_column_printed || i > 0) {
 			appendStringInfoString(&buffer, ", ");
 		}
@@ -593,9 +724,11 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 		appendStringInfoString(&buffer, ")");
 	}
 
+	/* close create table's outer parentheses */
 	appendStringInfoString(&buffer, ")");
 
 	if (!pgduckdb::IsDuckdbTableAm(relation->rd_tableam)) {
+		/* Shouldn't happen but seems good to check anyway */
 		elog(ERROR, "Only a table with the DuckDB can be stored in DuckDB, %d %d", relation->rd_rel->relam,
 		     pgduckdb::DuckdbTableAmOid());
 	}
@@ -609,7 +742,7 @@ pgduckdb_get_tabledef(Oid relation_oid) {
 	return buffer.data;
 }
 
-extern "C" char *
+char *
 pgduckdb_get_viewdef(const ViewStmt *stmt, const char *postgres_schema_name, const char *view_name,
                      const char *duckdb_query_string) {
 	StringInfoData buffer;
@@ -645,7 +778,46 @@ pgduckdb_get_viewdef(const ViewStmt *stmt, const char *postgres_schema_name, con
 	return buffer.data;
 }
 
-extern "C" char *
+/*
+ * Take a raw CHECK constraint expression and convert it to a cooked format
+ * ready for storage.
+ *
+ * Parse state must be set up to recognize any vars that might appear
+ * in the expression.
+ *
+ * Vendored in from src/backend/catalog/heap.c
+ */
+static Node *
+cookConstraint(ParseState *pstate, Node *raw_constraint, char *relname) {
+	Node *expr;
+
+	/*
+	 * Transform raw parsetree to executable expression.
+	 */
+	expr = transformExpr(pstate, raw_constraint, EXPR_KIND_CHECK_CONSTRAINT);
+
+	/*
+	 * Make sure it yields a boolean result.
+	 */
+	expr = coerce_to_boolean(pstate, expr, "CHECK");
+
+	/*
+	 * Take care of collations.
+	 */
+	assign_expr_collations(pstate, expr);
+
+	/*
+	 * Make sure no outside relations are referred to (this is probably dead
+	 * code now that add_missing_from is history).
+	 */
+	if (list_length(pstate->p_rtable) != 1)
+		ereport(ERROR, (errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+		                errmsg("only table \"%s\" can be referenced in check constraint", relname)));
+
+	return expr;
+}
+
+char *
 pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	if (rename_stmt->renameType != OBJECT_TABLE && rename_stmt->renameType != OBJECT_VIEW &&
 	    rename_stmt->renameType != OBJECT_COLUMN) {
@@ -681,7 +853,13 @@ pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt) {
 	return buffer.data;
 }
 
-extern "C" char *
+/*
+ * pgduckdb_get_alter_tabledef returns the DuckDB version of an ALTER TABLE
+ * command for the given table.
+ *
+ * TODO: Add support indexes
+ */
+char *
 pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 	Relation relation = relation_open(relation_oid, AccessShareLock);
 	const char *relation_name = pgddb_relation_name(relation_oid);
@@ -704,8 +882,8 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 
 	foreach_node(AlterTableCmd, cmd, alter_stmt->cmds) {
 		/*
-		 * DuckDB doesn't support multiple ALTER TABLE commands in one statement,
-		 * so we split them up.
+		 * DuckDB does not support doing multiple ALTER TABLE commands in
+		 * one statement, so we split them up.
 		 */
 		appendStringInfo(&buffer, "ALTER TABLE %s ", relation_name);
 
@@ -773,6 +951,7 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 			TupleDesc tupdesc = BuildDescForRelation(list_make1(col));
 			Form_pg_attribute attribute = TupleDescAttr(tupdesc, 0);
 			const char *column_fq_type = format_type_with_typemod(attribute->atttypid, attribute->atttypmod);
+			/* TODO: Disallow after SET DEFAULT/ADD CHECK CONSTRAINTin the same ALTER command */
 
 			appendStringInfo(&buffer, "ALTER COLUMN %s TYPE %s; ", quote_identifier(column_name), column_fq_type);
 			break;
@@ -781,6 +960,7 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 		case AT_DropColumn: {
 			appendStringInfo(&buffer, "DROP COLUMN %s", quote_identifier(cmd->name));
 
+			/* Add CASCADE or RESTRICT if specified */
 			if (cmd->behavior == DROP_CASCADE) {
 				appendStringInfoString(&buffer, " CASCADE");
 			} else if (cmd->behavior == DROP_RESTRICT) {
@@ -883,6 +1063,7 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 		case AT_DropConstraint: {
 			appendStringInfo(&buffer, "DROP CONSTRAINT %s", quote_identifier(cmd->name));
 
+			/* Add CASCADE or RESTRICT if specified */
 			if (cmd->behavior == DROP_CASCADE) {
 				appendStringInfoString(&buffer, " CASCADE");
 			} else if (cmd->behavior == DROP_RESTRICT) {
@@ -943,50 +1124,24 @@ pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt) {
 
 	return buffer.data;
 }
-
-/* ------------------------------------------------------------------------
- * Hook registration.
- * ------------------------------------------------------------------------ */
+}
 
 namespace pgduckdb {
 
 void
 InitRuleutilsHooks() {
-	prev_pgddb_function_name_hook = pgddb_function_name_hook;
 	pgddb_function_name_hook = pgduckdb_function_name;
-
-	prev_pgddb_is_fake_type_hook = pgddb_is_fake_type_hook;
-	pgddb_is_fake_type_hook = pgduckdb_is_fake_type_impl;
-
-	prev_pgddb_var_is_row_hook = pgddb_var_is_row_hook;
+	pgddb_is_fake_type_hook = pgduckdb_is_fake_type;
 	pgddb_var_is_row_hook = pgduckdb_var_is_duckdb_row;
-
-	prev_pgddb_subscript_var_hook = pgddb_subscript_var_hook;
 	pgddb_subscript_var_hook = pgduckdb_duckdb_subscript_var;
-
-	prev_pgddb_func_returns_row_hook = pgddb_func_returns_row_hook;
 	pgddb_func_returns_row_hook = pgduckdb_func_returns_duckdb_row;
-
-	prev_pgddb_replace_subquery_with_view_hook = pgddb_replace_subquery_with_view_hook;
 	pgddb_replace_subquery_with_view_hook = pgduckdb_replace_subquery_with_view;
-
-	prev_pgddb_show_type_hook = pgddb_show_type_hook;
 	pgddb_show_type_hook = pgduckdb_show_type;
-
-	prev_pgddb_reconstruct_star_step_hook = pgddb_reconstruct_star_step_hook;
 	pgddb_reconstruct_star_step_hook = pgduckdb_reconstruct_star_step;
-
-	prev_pgddb_strip_first_subscript_hook = pgddb_strip_first_subscript_hook;
 	pgddb_strip_first_subscript_hook = pgduckdb_strip_first_subscript;
-
-	prev_pgddb_subscript_has_custom_alias_hook = pgddb_subscript_has_custom_alias_hook;
 	pgddb_subscript_has_custom_alias_hook = pgduckdb_subscript_has_custom_alias;
-
-	prev_pgddb_write_row_refname_hook = pgddb_write_row_refname_hook;
 	pgddb_write_row_refname_hook = pgduckdb_write_row_refname;
-
-	prev_pgddb_db_and_schema_hook = pgddb_db_and_schema_hook;
-	pgddb_db_and_schema_hook = pgduckdb_db_and_schema_hook_impl;
+	pgddb_db_and_schema_hook = pgduckdb_db_and_schema;
 }
 
 } // namespace pgduckdb
