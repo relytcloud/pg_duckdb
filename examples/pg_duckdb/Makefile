@@ -22,13 +22,20 @@ OBJS += $(subst .c,.o, $(C_SRCS))
 # libpgddb objects, compiled in-place at $(ROOT_DIR)/src/.
 OBJS += $(PGDDB_OBJS)
 
-ifeq ($(DUCKDB_BUILD), ReleaseStatic)
-	PG_DUCKDB_LINK_FLAGS = $(FULL_DUCKDB_LIB) -lcurl
-else
-	PG_DUCKDB_LINK_FLAGS = -lduckdb
-endif
+# -lssl -lcrypto: the bundle's vendored httplib (in duckdb-httpfs) refs
+# OpenSSL APIs directly. On Linux those come in transitively via libcurl;
+# on macOS libcurl uses Secure Transport, so link explicitly.
+PG_DUCKDB_LINK_FLAGS = $(FULL_DUCKDB_LIB) -lcurl -lssl -lcrypto -lstdc++ -llz4
 
-PG_DUCKDB_LINK_FLAGS += -Wl,-rpath,$(PG_LIB)/ -L$(DUCKDB_BUILD_DIR)/src -L$(PG_LIB) -lstdc++ -llz4
+# --exclude-libs,ALL hides symbols from every static archive we pull in
+# (notably libduckdb_bundle.a) so the consumer .so only exports its own
+# UDFs + _PG_init. Prevents UDF-name collisions with bundled-extension
+# C symbols as more extensions are added. Linux/GNU-ld only; macOS ld
+# has no direct equivalent (the pg_vortex_version rename remains as a
+# safety net there).
+ifeq ($(shell uname -s),Linux)
+	PG_DUCKDB_LINK_FLAGS += -Wl,--exclude-libs,ALL
+endif
 
 # Ensure -lstdc++fs is included for GCC 8 builds
 CXX ?= c++
@@ -99,9 +106,6 @@ check: installcheck pycheck schedulecheck
 
 schedulecheck:
 	./scripts/schedule-check.sh
-
-# Hook the duckdb-install (from the root Makefile) into pgxs's install target.
-install: install-duckdb
 
 clean-all: clean clean-regression clean-duckdb
 

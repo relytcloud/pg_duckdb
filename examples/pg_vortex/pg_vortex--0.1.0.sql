@@ -2,7 +2,7 @@
 
 CREATE FUNCTION vortex_version()
 RETURNS text
-AS 'MODULE_PATHNAME', 'vortex_version'
+AS 'MODULE_PATHNAME', 'pg_vortex_version'
 LANGUAGE C STRICT;
 
 -- read_vortex is a marker UDF: all calls are intercepted by pg_vortex's

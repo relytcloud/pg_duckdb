@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "libpgduckdb"]
+    branches: ["main"]
     tags: ["v*"]
   pull_request:
 
@@ -17,18 +17,16 @@ jobs:
   # (the original pg_duckdb workflow, now dormant under examples/), adapted
   # for this repo's "libpgddb at root, examples/<name>/ for consumers" layout.
   build-and-test:
-    name: "Build and test (PG ${{ matrix.version }} / ${{ matrix.type }})"
+    name: "Build and test (PG ${{ matrix.version }})"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
+    # libduckdb is always statically bundled into each consumer's .so
+    # (see root Makefile); there's no `type` distinction anymore.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - version: REL_17_STABLE
-            type: Release
-          - version: REL_18_STABLE
-            type: ReleaseStatic
+        version: [REL_17_STABLE, REL_18_STABLE]
 
     steps:
       - name: Install build deps
@@ -42,7 +40,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ubuntu-24.04-${{ matrix.version }}-${{ matrix.type }}
+          key: ubuntu-24.04-${{ matrix.version }}
           create-symlink: true
 
       - name: Checkout repo
@@ -58,7 +56,7 @@ jobs:
       - name: Compute version SHAs
         id: versions
         run: |
-          DUCKDB_SHA=$(git -C examples/pg_duckdb/third_party/duckdb rev-parse HEAD)
+          DUCKDB_SHA=$(git -C third_party/duckdb rev-parse HEAD)
           POSTGRES_SHA=$(git -C postgres rev-parse HEAD)
           echo "duckdb_sha=$DUCKDB_SHA" >> "$GITHUB_OUTPUT"
           echo "postgres_sha=$POSTGRES_SHA" >> "$GITHUB_OUTPUT"
@@ -91,33 +89,41 @@ jobs:
       - name: Cache DuckDB build
         uses: actions/cache@v4
         with:
-          path: examples/pg_duckdb/third_party/duckdb/build/
-          key: duckdb-build-ubuntu-24.04-${{ matrix.type }}-${{ steps.versions.outputs.duckdb_sha }}
+          path: third_party/duckdb/build/
+          # Hash BOTH consumers' extension configs: each consumer now builds
+          # libduckdb into its own build/<type>-<consumer-tag>/ subdir, so any
+          # change to either set must invalidate the cache.
+          key: duckdb-build-ubuntu-24.04-${{ steps.versions.outputs.duckdb_sha }}-${{ hashFiles('examples/pg_duckdb/third_party/pg_duckdb_extensions.cmake', 'examples/pg_vortex/pg_vortex_extensions.cmake') }}
 
+      # Each consumer builds its own libduckdb into
+      # third_party/duckdb/build/<type>-<consumer-tag>/, so the build order
+      # below doesn't matter -- they no longer share artifacts.
+      - name: Build pg_vortex
+        run: ERROR_ON_WARNING=1 make examples/pg_vortex/all -j$(nproc)
+      - name: Install pg_vortex
+        run: make examples/pg_vortex/install
       # ---- pg_duckdb ----
       # ERROR_ON_WARNING=1 catches new -Wall/-Wextra issues introduced by libpgddb extractions.
       - name: Build pg_duckdb
-        run: ERROR_ON_WARNING=1 make examples/pg_duckdb/all -j$(nproc) DUCKDB_BUILD=${{ matrix.type }}
-
+        run: ERROR_ON_WARNING=1 make examples/pg_duckdb/all -j$(nproc)
       - name: Install pg_duckdb
-        run: make examples/pg_duckdb/install DUCKDB_BUILD=${{ matrix.type }}
-
-      # ---- pg_vortex ----
-      - name: Build pg_vortex
-        run: make examples/pg_vortex/all
-
-      - name: Install pg_vortex
-        run: make examples/pg_vortex/install
-
+        run: make examples/pg_duckdb/install
       # ---- tests ----
       - name: pg_vortex installcheck
+        id: pgvortex_installcheck
         run: make examples/pg_vortex/installcheck
+      - name: Print pg_vortex regression.diffs on failure
+        if: failure() && steps.pgvortex_installcheck.outcome == 'failure'
+        run: cat examples/pg_vortex/regression.diffs || true
+
+      - name: Print pg_vortex postmaster.log on failure
+        if: failure() && steps.pgvortex_installcheck.outcome == 'failure'
+        run: cat examples/pg_vortex/log/postmaster.log || true
 
       - name: pg_duckdb installcheck
         id: pgduckdb_installcheck
         timeout-minutes: 30
-        run: make examples/pg_duckdb/installcheck DUCKDB_BUILD=${{ matrix.type }}
-
+        run: make examples/pg_duckdb/installcheck
       - name: Print regression.diffs on failure
         if: failure() && steps.pgduckdb_installcheck.outcome == 'failure'
         run: cat examples/pg_duckdb/test/regression/regression.diffs || true
@@ -130,7 +136,7 @@ jobs:
         if: failure() && steps.pgduckdb_installcheck.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: pg_duckdb-regression-${{ matrix.version }}-${{ matrix.type }}
+          name: pg_duckdb-regression-${{ matrix.version }}
           path: |
             examples/pg_duckdb/test/regression/regression.diffs
             examples/pg_duckdb/test/regression/regression.out

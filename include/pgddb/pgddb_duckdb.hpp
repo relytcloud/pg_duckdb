@@ -81,6 +81,14 @@ protected:
 	virtual void
 	RequireExecution() {
 	}
+
+	// Whether GetConnection should open a DuckDB transaction. Default uses
+	// PG's IsInTransactionBlock at the top-level (no function-context
+	// tracking). pg_duckdb overrides this to consult its own
+	// top_level_statement flag so DuckDB joins the outer PG transaction
+	// when invoked from inside a plpgsql function.
+	virtual bool ShouldBeginTransaction();
+
 	/*
 	 * FIXME: Use a unique_ptr instead of a raw pointer. For now this is not
 	 * possible though, as the MotherDuck extension causes an ABORT when the

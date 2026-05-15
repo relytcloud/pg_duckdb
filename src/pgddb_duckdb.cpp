@@ -38,6 +38,11 @@ DidWrites(duckdb::ClientContext &context) {
 
 duckdb::unique_ptr<DuckDBManager> DuckDBManager::manager_instance;
 
+bool
+DuckDBManager::ShouldBeginTransaction() {
+	return pgddb::pg::IsInTransactionBlock(true);
+}
+
 char *duckdb_temporary_directory = strdup("");
 char *duckdb_extension_directory = strdup("");
 char *duckdb_max_temp_directory_size = strdup("");
@@ -161,7 +166,7 @@ DuckDBManager::GetConnection(bool force_transaction) {
 			throw duckdb::NotImplementedException("SAVEPOINT and subtransactions are not supported in DuckDB");
 		}
 
-		if (force_transaction || pgddb::pg::IsInTransactionBlock(true)) {
+		if (force_transaction || instance.ShouldBeginTransaction()) {
 			/*
 			 * We only want to open a new DuckDB transaction if we're already
 			 * in a Postgres transaction block. Always opening a transaction

@@ -34,16 +34,13 @@ namespace pgduckdb {
 
 namespace {
 
+// Used by SET_DUCKDB_OPTION below. After the dir/memory/threads globals
+// moved to libpgddb, the only remaining SET_DUCKDB_OPTION call sites are
+// bool flags -- so we only need the integral overload.
 template <typename T>
 std::string
 ToString(T value) {
 	return std::to_string(value);
-}
-
-template <>
-std::string
-ToString(char *value) {
-	return std::string(value);
 }
 
 const char *
@@ -210,6 +207,11 @@ DuckDBManager::RefreshConnectionState(duckdb::ClientContext &context) {
 void
 DuckDBManager::RequireExecution() {
 	::pgduckdb::RequireDuckdbExecution();
+}
+
+bool
+DuckDBManager::ShouldBeginTransaction() {
+	return ::pgduckdb::pg::IsInTransactionBlock();
 }
 
 void

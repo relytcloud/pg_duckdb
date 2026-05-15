@@ -24,10 +24,13 @@ _PG_init(void)
 	pg_vortex::InitHooks();
 }
 
-PG_FUNCTION_INFO_V1(vortex_version);
+// C symbol differs from the SQL-level `vortex_version()` to avoid a
+// collision with duckdb-vortex's own `vortex_version` in libduckdb_bundle.a.
+PG_FUNCTION_INFO_V1(pg_vortex_version);
 Datum
-vortex_version(PG_FUNCTION_ARGS)
+pg_vortex_version(PG_FUNCTION_ARGS)
 {
+	(void) fcinfo;
 	PG_RETURN_TEXT_P(cstring_to_text("pg_vortex 0.1.0"));
 }
 

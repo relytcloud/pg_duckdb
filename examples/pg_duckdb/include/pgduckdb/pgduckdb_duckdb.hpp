@@ -26,6 +26,7 @@ public:
 
 	std::string ConnectionString() override;
 	void RequireExecution() override;
+	bool ShouldBeginTransaction() override;
 
 private:
 	void LoadSecrets(duckdb::ClientContext &context);

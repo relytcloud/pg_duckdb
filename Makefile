@@ -5,12 +5,12 @@
 # 2. libpgddb source list: extension Makefiles `include` this file to pull
 #    in PGDDB_INCLUDE / PGDDB_OBJS / PGDDB_DUCKDB_INCLUDE. They append
 #    PGDDB_OBJS to OBJS so the libpgddb sources get bundled into their dylib.
-# 3. DuckDB submodule + build. The submodule lives at $(PGDDB_DIR)/third_party/duckdb
-#    and is shared across consumers. Consumers pass their own
-#    EXTENSION_CONFIGS=/abs/path/to/their_extensions.cmake before invoking
-#    `duckdb` / `install-duckdb`. NOTE: cmake caches extension choices in the
-#    build dir, so switching EXTENSION_CONFIGS between consumers on the same
-#    machine requires `make clean-duckdb` first.
+# 3. DuckDB submodule + build. Each consumer's EXTENSION_CONFIGS produces
+#    its own libduckdb_bundle.a in a tagged build/<type>-<tag>/ subdir;
+#    that .a is statically linked into the consumer's .so. We never publish
+#    libduckdb.so at $(PG_LIB), so consumers can't overwrite each other's
+#    runtime duckdb. cmake is driven directly (duckdb's `make release` /
+#    `make bundle-library` hard-code build/release/ so they can't share).
 
 PGDDB_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 PGDDB_INCLUDE := -I$(PGDDB_DIR)/include
@@ -36,34 +36,36 @@ DUCKDB_CMAKE_VARS = -DCXX_EXTRA=-fvisibility=default -DBUILD_SHELL=0 -DBUILD_PYT
 DUCKDB_DISABLE_ASSERTIONS ?= 0
 
 DUCKDB_BUILD_CXX_FLAGS=
-DUCKDB_BUILD_TYPE=
 ifeq ($(DUCKDB_BUILD), Debug)
 	DUCKDB_BUILD_CXX_FLAGS = -g -O0 -D_GLIBCXX_ASSERTIONS
 	DUCKDB_BUILD_TYPE = debug
-	DUCKDB_MAKE_TARGET = debug
-else ifeq ($(DUCKDB_BUILD), ReleaseStatic)
-	DUCKDB_BUILD_CXX_FLAGS =
-	DUCKDB_BUILD_TYPE = release
-	DUCKDB_MAKE_TARGET = bundle-library
+	DUCKDB_CMAKE_BUILD_TYPE = Debug
+	DUCKDB_EXTRA_CMAKE_VARS = -DDEBUG_MOVE=1
 else
-	DUCKDB_BUILD_CXX_FLAGS =
 	DUCKDB_BUILD_TYPE = release
-	DUCKDB_MAKE_TARGET = release
+	DUCKDB_CMAKE_BUILD_TYPE = Release
+endif
+ifeq ($(DUCKDB_DISABLE_ASSERTIONS), 1)
+	DUCKDB_EXTRA_CMAKE_VARS += -DDISABLE_ASSERTIONS=1
+endif
+ifeq ($(DUCKDB_GEN), ninja)
+	DUCKDB_CMAKE_GENERATOR := -G Ninja
+	DUCKDB_CMAKE_FORCE_COLOR := -DFORCE_COLORED_OUTPUT=1
 endif
 
-DUCKDB_BUILD_DIR = $(PGDDB_DIR)/third_party/duckdb/build/$(DUCKDB_BUILD_TYPE)
-
-ifeq ($(DUCKDB_BUILD), ReleaseStatic)
-	FULL_DUCKDB_LIB = $(DUCKDB_BUILD_DIR)/libduckdb_bundle.a
-else
-	FULL_DUCKDB_LIB = $(DUCKDB_BUILD_DIR)/src/libduckdb$(DLSUFFIX)
-endif
+# Per-consumer build dir, keyed by the EXTENSION_CONFIGS content hash
+# (plus a human-readable basename prefix) so two consumers whose configs
+# happen to share a basename can still coexist, and re-pointing a
+# consumer at a different config naturally lands in a new dir.
+DUCKDB_CONSUMER_TAG := $(if $(EXTENSION_CONFIGS),$(basename $(notdir $(EXTENSION_CONFIGS)))-$(shell shasum -a 256 '$(EXTENSION_CONFIGS)' 2>/dev/null | cut -c1-8),default)
+DUCKDB_BUILD_DIR := $(PGDDB_DIR)/third_party/duckdb/build/$(DUCKDB_BUILD_TYPE)-$(DUCKDB_CONSUMER_TAG)
+FULL_DUCKDB_LIB = $(DUCKDB_BUILD_DIR)/libduckdb_bundle.a
 
 # Consumer-provided absolute path to its *_extensions.cmake. Empty = no
 # third-party extensions baked in.
 EXTENSION_CONFIGS ?=
 
-.PHONY: duckdb install-duckdb clean-duckdb
+.PHONY: duckdb clean-duckdb
 
 duckdb: $(FULL_DUCKDB_LIB)
 
@@ -71,26 +73,41 @@ $(PGDDB_DIR)/.git/modules/third_party/duckdb/HEAD:
 	git -C $(PGDDB_DIR) submodule update --init --recursive
 
 $(FULL_DUCKDB_LIB): $(PGDDB_DIR)/.git/modules/third_party/duckdb/HEAD $(EXTENSION_CONFIGS)
-ifeq ($(DUCKDB_BUILD), ReleaseStatic)
-	mkdir -p $(PGDDB_DIR)/third_party/duckdb/build/release/vcpkg_installed
-endif
-	OVERRIDE_GIT_DESCRIBE=$(DUCKDB_VERSION) \
-	GEN=$(DUCKDB_GEN) \
-	CMAKE_VARS="$(DUCKDB_CMAKE_VARS)" \
-	DISABLE_SANITIZER=1 \
-	DISABLE_ASSERTIONS=$(DUCKDB_DISABLE_ASSERTIONS) \
-	EXTENSION_CONFIGS="$(EXTENSION_CONFIGS)" \
-	$(MAKE) -C $(PGDDB_DIR)/third_party/duckdb \
-	$(DUCKDB_MAKE_TARGET)
-
-# install-duckdb is consumer-facing: must be invoked via a consumer Makefile
-# that has pgxs loaded so $(install_bin) and $(PG_LIB) are defined. In
-# ReleaseStatic mode duckdb is linked into the consumer's .dylib so this is a
-# no-op.
-install-duckdb: $(FULL_DUCKDB_LIB)
-ifneq ($(DUCKDB_BUILD), ReleaseStatic)
-	$(install_bin) -m 755 $(FULL_DUCKDB_LIB) $(DESTDIR)$(PG_LIB)
-endif
+	mkdir -p $(DUCKDB_BUILD_DIR)/vcpkg_installed
+	cmake -S $(PGDDB_DIR)/third_party/duckdb -B $(DUCKDB_BUILD_DIR) \
+		$(DUCKDB_CMAKE_GENERATOR) $(DUCKDB_CMAKE_FORCE_COLOR) \
+		-DENABLE_SANITIZER=FALSE -DENABLE_UBSAN=0 \
+		$(DUCKDB_CMAKE_VARS) $(DUCKDB_EXTRA_CMAKE_VARS) \
+		-DDUCKDB_EXTENSION_CONFIGS="$(EXTENSION_CONFIGS)" \
+		-DLOCAL_EXTENSION_REPO="" \
+		-DOVERRIDE_GIT_DESCRIBE="$(DUCKDB_VERSION)" \
+		-DDUCKDB_EXPLICIT_VERSION="" \
+		-DCMAKE_BUILD_TYPE=$(DUCKDB_CMAKE_BUILD_TYPE)
+	cmake --build $(DUCKDB_BUILD_DIR) --config $(DUCKDB_CMAKE_BUILD_TYPE)
+	@# Inline of duckdb's bundle-setup + bundle-library-o targets (see
+	@# third_party/duckdb/Makefile `bundle-setup` / `bundle-library-o` /
+	@# `bundle-library`). Future duckdb-submodule bumps should diff
+	@# against those targets to catch divergence.
+	@#
+	@# We whitelist archive patterns rather than globbing extension/*/*.a:
+	@# lib*_extension.a is the loader stub each extension emits, and
+	@# lib*_duckdb.a is the auxiliary archive pattern duckdb-vortex (and
+	@# similar Rust-backed extensions) drop alongside it. The narrow
+	@# whitelist avoids accidentally scooping up test fixtures cmake may
+	@# leave under extension/ in future versions.
+	rm -f $(DUCKDB_BUILD_DIR)/libduckdb_bundle.a
+	rm -rf $(DUCKDB_BUILD_DIR)/bundle
+	mkdir -p $(DUCKDB_BUILD_DIR)/bundle
+	cp $(DUCKDB_BUILD_DIR)/src/libduckdb_static.a $(DUCKDB_BUILD_DIR)/bundle/.
+	cp $(DUCKDB_BUILD_DIR)/third_party/*/libduckdb_*.a $(DUCKDB_BUILD_DIR)/bundle/.
+	find $(DUCKDB_BUILD_DIR)/extension -maxdepth 2 \
+		\( -name 'lib*_extension.a' -o -name 'lib*_duckdb.a' \) \
+		-exec cp {} $(DUCKDB_BUILD_DIR)/bundle/. \;
+	find $(DUCKDB_BUILD_DIR)/vcpkg_installed -name '*.a' -exec cp {} $(DUCKDB_BUILD_DIR)/bundle/. \;
+	cd $(DUCKDB_BUILD_DIR)/bundle && \
+		find . -name '*.a' -exec mkdir -p {}.objects \; -exec mv {} {}.objects \; && \
+		find . -name '*.a' -execdir $(AR) -x {} \;
+	cd $(DUCKDB_BUILD_DIR)/bundle && echo ./*/*.o | xargs $(AR) cr ../libduckdb_bundle.a
 
 clean-duckdb:
 	rm -rf $(PGDDB_DIR)/third_party/duckdb/build
