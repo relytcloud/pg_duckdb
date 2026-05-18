@@ -1,0 +1,161 @@
+-- Test ducklake.direct_insert_stats() / reset_direct_insert_stats().
+-- Exercises every (pattern, reason) bucket plus the gates that should
+-- NOT bump any counter (GUC off, tx block, non-ducklake target).
+--
+-- Ordering note: data_inlining_row_limit is a session-global setting.
+-- We raise it for the matched / greater_than_limit / unsupported cases
+-- and drop it for the no_inlined_table case.
+
+-- Helper view: show only buckets with non-zero counts, in a stable order.
+CREATE OR REPLACE VIEW direct_insert_stats_nonzero AS
+    SELECT pattern, reason, count FROM ducklake.direct_insert_stats()
+    WHERE count > 0 ORDER BY pattern, reason;
+
+-- Schema is stable across resets: 2 matched rows + every non-ok reason.
+SELECT ducklake.reset_direct_insert_stats();
+SELECT count(*) AS total_buckets FROM ducklake.direct_insert_stats();
+SELECT pattern, reason FROM ducklake.direct_insert_stats() ORDER BY pattern, reason;
+
+-- ------------------------------------------------------------------
+-- matched_unnest / matched_values  (row_limit = 100)
+-- ------------------------------------------------------------------
+CALL ducklake.set_option('data_inlining_row_limit', 100);
+CREATE TABLE dis_t (i INT, v TEXT) USING ducklake;
+
+SELECT ducklake.reset_direct_insert_stats();
+
+-- matched_values
+INSERT INTO dis_t VALUES (1, 'a'), (2, 'b');
+-- matched_unnest
+PREPARE dis_unnest (int[], text[]) AS INSERT INTO dis_t SELECT UNNEST($1), UNNEST($2);
+EXECUTE dis_unnest(ARRAY[3, 4], ARRAY['c', 'd']);
+EXECUTE dis_unnest(ARRAY[5, 6], ARRAY['e', 'f']);
+DEALLOCATE dis_unnest;
+
+SELECT * FROM direct_insert_stats_nonzero;
+
+-- ------------------------------------------------------------------
+-- INSERT INTO t (col-list) VALUES (...)  -- column-list shapes all
+-- match matched_values, with defaults honored and unspecified columns
+-- filled with typed NULL.  Multi-row partial column list with DEFAULT
+-- exercises the values-vs-default discrimination in the planner.
+-- ------------------------------------------------------------------
+CREATE TABLE dis_cols (a INT, b TEXT DEFAULT 'foo', c INT) USING ducklake;
+INSERT INTO dis_cols VALUES (0, 'init', 0);  -- warm up inlined table
+
+SELECT ducklake.reset_direct_insert_stats();
+
+INSERT INTO dis_cols (a, b, c) VALUES (1, 'x', 2);              -- full
+INSERT INTO dis_cols (a, c) VALUES (10, 20);                    -- partial, default for b
+INSERT INTO dis_cols (b) VALUES ('z');                          -- single col
+INSERT INTO dis_cols (a, c) VALUES (30, 31), (32, 33);          -- multi-row partial + default
+INSERT INTO dis_cols DEFAULT VALUES;                            -- all defaults
+
+SELECT * FROM direct_insert_stats_nonzero;
+SELECT a, b, c FROM dis_cols ORDER BY a NULLS FIRST, c NULLS FIRST;
+
+DROP TABLE dis_cols;
+
+-- ------------------------------------------------------------------
+-- Gating: GUC off, tx block, non-ducklake -- NO counters bumped
+-- ------------------------------------------------------------------
+SELECT ducklake.reset_direct_insert_stats();
+
+SET ducklake.enable_direct_insert = false;
+INSERT INTO dis_t VALUES (100, 'off');
+SET ducklake.enable_direct_insert = true;
+
+BEGIN;
+INSERT INTO dis_t VALUES (101, 'tx');
+COMMIT;
+
+CREATE TABLE dis_heap (i INT);
+INSERT INTO dis_heap VALUES (1), (2);
+DROP TABLE dis_heap;
+
+SELECT count(*) AS gated_count FROM direct_insert_stats_nonzero;
+
+-- ------------------------------------------------------------------
+-- ALTER that bumps schema_version must NOT trip schema_version_mismatch.
+-- DuckLake creates a new ducklake_inlined_data_tables row at the new
+-- schema_version on commit; we plan against MAX(sv) and stay matched.
+-- (Regression guard for issue #197.)
+-- ------------------------------------------------------------------
+CREATE TABLE dis_sv (i INT) USING ducklake;
+INSERT INTO dis_sv VALUES (0);          -- inlined at sv=N
+ALTER TABLE dis_sv ADD COLUMN v TEXT;   -- bumps per-table sv to N+1
+
+SELECT ducklake.reset_direct_insert_stats();
+INSERT INTO dis_sv VALUES (1, 'x');
+
+SELECT * FROM direct_insert_stats_nonzero;
+
+DROP TABLE dis_sv;
+
+-- ------------------------------------------------------------------
+-- unmatched / col_types_unsupported  (TIMESTAMPTZ is blacklisted)
+-- First INSERT creates the inlined table via DuckDB (direct insert
+-- rejects TIMESTAMPTZ).  Second INSERT exercises the col-types check.
+-- ------------------------------------------------------------------
+CREATE TABLE dis_tz (i INT, t TIMESTAMPTZ) USING ducklake;
+INSERT INTO dis_tz VALUES (1, '2026-01-01 00:00:00+00');
+
+SELECT ducklake.reset_direct_insert_stats();
+INSERT INTO dis_tz VALUES (2, '2026-01-02 00:00:00+00');
+SELECT * FROM direct_insert_stats_nonzero;
+
+DROP TABLE dis_tz;
+
+-- ------------------------------------------------------------------
+-- unmatched / greater_than_limit
+-- ------------------------------------------------------------------
+CALL ducklake.set_option('data_inlining_row_limit', 3);
+
+CREATE TABLE dis_gt (i INT) USING ducklake;
+INSERT INTO dis_gt VALUES (0);          -- init
+
+SELECT ducklake.reset_direct_insert_stats();
+INSERT INTO dis_gt VALUES (1), (2), (3), (4), (5);  -- 5 > 3
+
+SELECT * FROM direct_insert_stats_nonzero;
+
+DROP TABLE dis_gt;
+CALL ducklake.set_option('data_inlining_row_limit', 100);
+
+-- ------------------------------------------------------------------
+-- unmatched / unsupported_insert_shape
+--   INSERT ... SELECT FROM set-returning function
+--   INSERT ... SELECT FROM other table
+--   INSERT ... RETURNING (pg_duckdb rejects the RETURNING separately
+--     at execution, but the planner count still bumps)
+-- ------------------------------------------------------------------
+CREATE TABLE dis_src (i INT, v TEXT);
+INSERT INTO dis_src VALUES (300, 'x'), (301, 'y');
+
+SELECT ducklake.reset_direct_insert_stats();
+INSERT INTO dis_t SELECT g, 'gs' FROM generate_series(200, 202) g;
+INSERT INTO dis_t SELECT i, v FROM dis_src;
+
+SELECT * FROM direct_insert_stats_nonzero;
+
+DROP TABLE dis_src;
+DROP TABLE dis_t;
+
+-- ------------------------------------------------------------------
+-- unmatched / no_inlined_table  (row_limit disabled -> no idt row)
+-- ------------------------------------------------------------------
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+CREATE TABLE dis_ni (i INT) USING ducklake;
+
+SELECT ducklake.reset_direct_insert_stats();
+INSERT INTO dis_ni VALUES (1);
+SELECT * FROM direct_insert_stats_nonzero;
+
+DROP TABLE dis_ni;
+
+-- ------------------------------------------------------------------
+-- Cleanup
+-- ------------------------------------------------------------------
+DROP VIEW direct_insert_stats_nonzero;
+SELECT ducklake.reset_direct_insert_stats();

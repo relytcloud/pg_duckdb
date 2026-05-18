@@ -1,0 +1,5 @@
+comment = 'Minimal pg_duckdb + DuckLake bridge extension'
+default_version = '0.1.0'
+module_pathname = '$libdir/pg_ducklake'
+relocatable = false
+requires = 'pg_duckdb'

@@ -1,0 +1,53 @@
+-- Test ducklake.options() and ducklake.set_option()
+-- 0. options() should return rows without crashing (issue #136)
+SELECT count(*) > 0 AS has_options FROM ducklake.options();
+ has_options 
+-------------
+ t
+(1 row)
+
+-- 1. Set a global option
+CALL ducklake.set_option('data_inlining_row_limit', 100);
+-- 2. Set a table-scoped option
+CREATE TABLE options_test (a int) USING ducklake;
+CALL ducklake.set_option('data_inlining_row_limit', 50, 'options_test'::regclass);
+-- 3. Verify data insertion works with inlining enabled
+INSERT INTO options_test VALUES (1), (2), (3);
+SELECT * FROM options_test ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+-- 4. Test invalid option name
+CALL ducklake.set_option('nonexistent_option', 42);
+ERROR:  (PGDuckDB/pgduckdb_raw_query_cpp) Not implemented Error: Unsupported option nonexistent_option
+
+LINE 1: CALL pgducklake.set_option('nonexistent_option', 42)
+             ^
+-- 5. Error: set_option on a non-ducklake table
+CREATE TABLE regular_table (id int);
+CALL ducklake.set_option('data_inlining_row_limit', 50, 'regular_table'::regclass);
+ERROR:  (PGDuckDB/pgduckdb_raw_query_cpp) Catalog Error: Table with name regular_table does not exist!
+Did you mean "options_test"?
+
+LINE 1: CALL pgducklake.set_option('data_inlining_row_limit', 50, table_...
+             ^
+DROP TABLE regular_table;
+-- 6. Schema-scoped option (use target_file_size to avoid affecting data
+--    inlining in later tests -- schema-scoped options can't be removed)
+CALL ducklake.set_option('target_file_size', 1048576, 'public'::regnamespace);
+ERROR:  (PGDuckDB/pgduckdb_raw_query_cpp) Parser Error: Unknown unit for memory: '' (expected: KB, MB, GB, TB for 1000^i units or KiB, MiB, GiB, TiB for 1024^i units)
+
+LINE 1: CALL pgducklake.set_option('target_file_size', 1048576, schema...
+             ^
+-- 7. Error: schema-scoped option on nonexistent schema
+CALL ducklake.set_option('target_file_size', 1048576, 'nonexistent_schema'::regnamespace);
+ERROR:  schema "nonexistent_schema" does not exist
+LINE 1: ... ducklake.set_option('target_file_size', 1048576, 'nonexiste...
+                                                             ^
+-- Cleanup
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+DROP TABLE options_test;

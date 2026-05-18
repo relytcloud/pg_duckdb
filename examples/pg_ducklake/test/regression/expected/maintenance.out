@@ -1,0 +1,326 @@
+-- Test dedicated maintenance functions
+-- Disable data inlining so we create actual files
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+-- =============================================================
+-- flush_inlined_data (regclass)
+-- =============================================================
+CALL ducklake.set_option('data_inlining_row_limit', 100);
+CREATE TABLE maint_flush (a int, b text) USING ducklake;
+-- These inserts go inline (fewer than 100 rows each)
+INSERT INTO maint_flush VALUES (1, 'one');
+INSERT INTO maint_flush VALUES (2, 'two');
+INSERT INTO maint_flush VALUES (3, 'three');
+SELECT * FROM maint_flush ORDER BY a;
+ a |   b   
+---+-------
+ 1 | one
+ 2 | two
+ 3 | three
+(3 rows)
+
+-- No data files yet (all data is inlined)
+SELECT count(*)
+FROM ducklake.ducklake_data_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_flush'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     0
+(1 row)
+
+-- Flush inlined data to parquet
+SELECT * FROM ducklake.flush_inlined_data('maint_flush'::regclass);
+ schema_name | table_name  | rows_flushed 
+-------------+-------------+--------------
+ public      | maint_flush |            3
+(1 row)
+
+-- Data files should now exist
+SELECT count(*)
+FROM ducklake.ducklake_data_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_flush'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     1
+(1 row)
+
+-- Data is correct after flush
+SELECT * FROM maint_flush ORDER BY a;
+ a |   b   
+---+-------
+ 1 | one
+ 2 | two
+ 3 | three
+(3 rows)
+
+DROP TABLE maint_flush;
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+-- =============================================================
+-- merge_adjacent_files (regclass)
+-- =============================================================
+CREATE TABLE maint_merge (a int, b text) USING ducklake;
+-- Create multiple small files
+INSERT INTO maint_merge VALUES (1, 'one');
+INSERT INTO maint_merge VALUES (2, 'two');
+INSERT INTO maint_merge VALUES (3, 'three');
+INSERT INTO maint_merge VALUES (4, 'four');
+INSERT INTO maint_merge VALUES (5, 'five');
+-- Check file count before merge
+SELECT count(*)
+FROM ducklake.ducklake_data_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_merge'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     5
+(1 row)
+
+-- Merge with regclass
+SELECT * FROM ducklake.merge_adjacent_files('maint_merge'::regclass);
+ schema_name | table_name  | files_processed | files_created 
+-------------+-------------+-----------------+---------------
+ public      | maint_merge |               5 |             1
+(1 row)
+
+SELECT * FROM maint_merge ORDER BY a;
+ a |   b   
+---+-------
+ 1 | one
+ 2 | two
+ 3 | three
+ 4 | four
+ 5 | five
+(5 rows)
+
+-- Check file count after merge
+SELECT count(*)
+FROM ducklake.ducklake_data_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_merge'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     1
+(1 row)
+
+DROP TABLE maint_merge;
+-- =============================================================
+-- merge_adjacent_files (no args -- whole catalog)
+-- =============================================================
+CREATE TABLE maint_merge2 (a int) USING ducklake;
+INSERT INTO maint_merge2 VALUES (1);
+INSERT INTO maint_merge2 VALUES (2);
+SELECT * FROM ducklake.merge_adjacent_files();
+ schema_name |  table_name  | files_processed | files_created 
+-------------+--------------+-----------------+---------------
+ public      | maint_merge2 |               2 |             1
+(1 row)
+
+SELECT * FROM maint_merge2 ORDER BY a;
+ a 
+---
+ 1
+ 2
+(2 rows)
+
+DROP TABLE maint_merge2;
+-- =============================================================
+-- rewrite_data_files (regclass)
+-- =============================================================
+-- Lower the delete threshold so rewrite triggers with fewer deletes
+CALL ducklake.set_option('rewrite_delete_threshold', 0.1);
+CREATE TABLE maint_rewrite (a int, b text) USING ducklake;
+INSERT INTO maint_rewrite SELECT i, 'val' || i FROM generate_series(1, 100) i;
+-- Delete enough rows to exceed 10% threshold
+DELETE FROM maint_rewrite WHERE a <= 50;
+SELECT count(*) FROM maint_rewrite;
+ count 
+-------
+    50
+(1 row)
+
+-- Check delete file count before rewrite
+SELECT count(*)
+FROM ducklake.ducklake_delete_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_rewrite'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     1
+(1 row)
+
+-- Rewrite with regclass
+SELECT * FROM ducklake.rewrite_data_files('maint_rewrite'::regclass);
+ schema_name |  table_name   | files_processed | files_created 
+-------------+---------------+-----------------+---------------
+ public      | maint_rewrite |               1 |             1
+(1 row)
+
+SELECT count(*) FROM maint_rewrite;
+ count 
+-------
+    50
+(1 row)
+
+-- Check delete file count after rewrite (should be 0)
+SELECT count(*)
+FROM ducklake.ducklake_delete_file ddf
+JOIN ducklake.ducklake_table dt ON ddf.table_id = dt.table_id
+JOIN ducklake.ducklake_schema ds ON dt.schema_id = ds.schema_id
+WHERE dt.table_name = 'maint_rewrite'
+  AND ds.schema_name = 'public'
+  AND ddf.end_snapshot IS NULL;
+ count 
+-------
+     0
+(1 row)
+
+DROP TABLE maint_rewrite;
+-- =============================================================
+-- rewrite_data_files (no args -- whole catalog)
+-- =============================================================
+CREATE TABLE maint_rewrite2 (a int) USING ducklake;
+INSERT INTO maint_rewrite2 SELECT i FROM generate_series(1, 50) i;
+DELETE FROM maint_rewrite2 WHERE a <= 25;
+SELECT * FROM ducklake.rewrite_data_files();
+ schema_name |   table_name   | files_processed | files_created 
+-------------+----------------+-----------------+---------------
+ public      | maint_rewrite2 |               1 |             1
+(1 row)
+
+SELECT count(*) FROM maint_rewrite2;
+ count 
+-------
+    25
+(1 row)
+
+DROP TABLE maint_rewrite2;
+CALL ducklake.set_option('rewrite_delete_threshold', 0.2);
+-- =============================================================
+-- expire_snapshots (no args)
+-- =============================================================
+CREATE TABLE maint_expire (a int) USING ducklake;
+INSERT INTO maint_expire VALUES (1);
+INSERT INTO maint_expire VALUES (2);
+-- Expire all eligible snapshots
+SELECT count(*) >= 0 AS ok FROM ducklake.expire_snapshots();
+ ok 
+----
+ t
+(1 row)
+
+SELECT * FROM maint_expire ORDER BY a;
+ a 
+---
+ 1
+ 2
+(2 rows)
+
+DROP TABLE maint_expire;
+-- =============================================================
+-- cleanup_old_files (no args)
+-- =============================================================
+CREATE TABLE maint_cleanup_old (a int) USING ducklake;
+INSERT INTO maint_cleanup_old VALUES (1);
+-- Prior maintenance tests may have left files scheduled for deletion
+SELECT count(*) >= 0 AS ok FROM ducklake.cleanup_old_files();
+ ok 
+----
+ t
+(1 row)
+
+SELECT * FROM maint_cleanup_old ORDER BY a;
+ a 
+---
+ 1
+(1 row)
+
+DROP TABLE maint_cleanup_old;
+-- =============================================================
+-- cleanup_orphaned_files (no args)
+-- =============================================================
+CREATE TABLE maint_cleanup_orphan (a int) USING ducklake;
+INSERT INTO maint_cleanup_orphan VALUES (1);
+-- Prior tests may have left orphaned files on disk
+SELECT count(*) >= 0 AS ok FROM ducklake.cleanup_orphaned_files();
+ ok 
+----
+ t
+(1 row)
+
+SELECT * FROM maint_cleanup_orphan ORDER BY a;
+ a 
+---
+ 1
+(1 row)
+
+DROP TABLE maint_cleanup_orphan;
+-- Restore default
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+-- =============================================================
+-- Background maintenance worker smoke test (issue #183)
+--
+-- Verifies the launcher/worker pair can run a full cycle without
+-- crashing. If the worker segfaults, the postmaster terminates all
+-- backends and this test's connection dies with a FATAL error.
+-- =============================================================
+CREATE TABLE maint_bgw_smoke (a int) USING ducklake;
+INSERT INTO maint_bgw_smoke VALUES (1), (2), (3);
+ALTER SYSTEM SET ducklake.maintenance_naptime = 1;
+ALTER SYSTEM SET ducklake.maintenance_enabled = on;
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- Wait long enough for the launcher to wake on SIGHUP, spawn a worker,
+-- and for at least one worker to run to completion.
+SELECT pg_sleep(4);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+-- The launcher must still be alive; if a worker had segfaulted, the
+-- postmaster would have torn down all backends by now.
+SELECT count(*) = 1 AS launcher_alive
+FROM pg_stat_activity
+WHERE backend_type = 'ducklake maintenance launcher';
+ launcher_alive 
+----------------
+ t
+(1 row)
+
+ALTER SYSTEM RESET ducklake.maintenance_enabled;
+ALTER SYSTEM RESET ducklake.maintenance_naptime;
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- Give the launcher a cycle to observe maintenance_enabled=off so no
+-- new worker is spawned against a table we're about to drop.
+SELECT pg_sleep(2);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+DROP TABLE maint_bgw_smoke;

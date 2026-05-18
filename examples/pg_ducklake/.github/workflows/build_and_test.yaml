@@ -1,0 +1,159 @@
+name: CI
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**", ".claude/**", ".agents/**", "LICENSE"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", ".claude/**", ".agents/**", "LICENSE"]
+
+# Cancel in-progress jobs if a new commit is pushed to the same branch (except for main)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !contains(github.ref, 'main') }}
+
+jobs:
+  format-check:
+    name: "Check code formatting"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get update -qq
+          sudo apt-get install -y clang-format-21
+      - name: Check formatting
+        run: find src/ include/ -name '*.cpp' -o -name '*.hpp' -o -name '*.h' | xargs clang-format-21 --dry-run -Werror
+
+  build-and-test:
+    name: "Build and test"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: REL_14_STABLE, type: release }
+          - { version: REL_15_STABLE, type: release }
+          - { version: REL_16_STABLE, type: release }
+          - { version: REL_17_STABLE, type: release }
+          - { version: REL_18_STABLE, type: release }
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Test details
+        run: echo Build and test pg_ducklake with PostgreSQL ${{ matrix.version }} branch
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E298A3A825C0D65DFD57CBB651716619E084DAB9
+          sudo apt-get install -y build-essential libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev \
+            libssl-dev libxml2-utils xsltproc pkg-config libc++-dev libc++abi-dev libglib2.0-dev libtinfo6 cmake \
+            libstdc++-12-dev ninja-build libcurl4-openssl-dev
+          echo "${PWD}/postgres/inst/bin:$PATH" >> $GITHUB_PATH
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ubuntu-24.04-${{ matrix.version }}
+          create-symlink: true
+
+      - name: Checkout pg_ducklake extension code
+        uses: actions/checkout@v4
+        with:
+          submodules: true  # duckdb submodule only; pg_duckdb and ducklake are subtrees
+          path: pg_ducklake
+
+      - name: Checkout PostgreSQL code
+        run: |
+          rm -rf postgres
+          git clone --branch ${{ matrix.version }} --single-branch --depth 1 https://github.com/postgres/postgres.git
+
+      - name: Compute Version SHAs
+        id: versions
+        working-directory: pg_ducklake
+        run: |
+          pushd third_party/pg_duckdb/third_party/duckdb
+          DUCKDB_SHA=`git rev-parse HEAD`
+          echo "duckdb_sha=${DUCKDB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Got DUCKDB_SHA='${DUCKDB_SHA}'"
+          popd
+          DUCKLAKE_SHA=`git log -1 --format=%H -- third_party/ducklake`
+          echo "ducklake_sha=${DUCKLAKE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Got DUCKLAKE_SHA='${DUCKLAKE_SHA}'"
+          pushd ../postgres
+          POSTGRES_SHA=`git rev-parse HEAD`
+          echo "postgres_sha=${POSTGRES_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Got POSTGRES_SHA='${POSTGRES_SHA}'"
+          popd
+
+      - name: Setup PG build cache
+        id: cache-pg-build
+        uses: actions/cache@v4
+        with:
+          path: postgres/inst
+          key: pg-build-ubuntu-24.04-${{ steps.versions.outputs.postgres_sha }}
+
+      - name: Build PostgreSQL code
+        if: steps.cache-pg-build.outputs.cache-hit != 'true'
+        working-directory: postgres
+        run: |
+          ./configure --prefix=$PWD/inst/ --enable-cassert --enable-debug --with-openssl --with-icu --with-libxml --with-lz4
+          make -j8 install
+
+      - name: Setup DuckDB build cache
+        id: cache-duckdb-build
+        uses: actions/cache@v4
+        with:
+          path: pg_ducklake/third_party/pg_duckdb/third_party/duckdb/build/
+          key: duckdb-build-ubuntu-24.04-${{ steps.versions.outputs.duckdb_sha }}-ninja
+
+      - name: Setup DuckLake build cache
+        id: cache-ducklake-build
+        uses: actions/cache@v4
+        with:
+          path: pg_ducklake/third_party/ducklake/build/
+          key: ducklake-build-ubuntu-24.04-${{ steps.versions.outputs.ducklake_sha }}-${{ steps.versions.outputs.duckdb_sha }}
+
+      - name: Build pg_duckdb and pg_ducklake
+        id: build
+        working-directory: pg_ducklake
+        run: ERROR_ON_WARNING=1 make -j8 install-pg_duckdb install DUCKDB_BUILD_TYPE=${{ matrix.type }}
+
+      - name: Run make installcheck
+        id: installcheck
+        working-directory: pg_ducklake
+        run: make installcheck DUCKDB_BUILD_TYPE=${{ matrix.type }}
+
+      - name: Run pg_duckdb regression tests
+        id: pg_duckdb_tests
+        working-directory: pg_ducklake/third_party/pg_duckdb
+        run: make check-regression-duckdb DUCKDB_BUILD_TYPE=${{ matrix.type }}
+
+      - name: Run direct insert benchmark
+        if: matrix.version == 'REL_18_STABLE'
+        working-directory: pg_ducklake
+        run: make bench-direct-insert
+        continue-on-error: true
+
+      - name: Run concurrent direct insert stress
+        working-directory: pg_ducklake
+        run: make bench-concurrent-direct-insert
+
+      - name: Print pg_ducklake regression.diffs
+        if: failure() && steps.installcheck.outcome == 'failure'
+        run: cat pg_ducklake/test/regression/regression.diffs && false
+
+      - name: Print pg_ducklake postmaster.log
+        if: failure() && steps.installcheck.outcome == 'failure'
+        run: cat pg_ducklake/test/regression/tmp_check/log/postmaster.log
+
+      - name: Print pg_duckdb regression.diffs
+        if: failure() && steps.pg_duckdb_tests.outcome == 'failure'
+        run: cat pg_ducklake/third_party/pg_duckdb/test/regression/regression.diffs && false
+
+      - name: Print pg_duckdb postmaster.log
+        if: failure() && steps.pg_duckdb_tests.outcome == 'failure'
+        run: cat pg_ducklake/third_party/pg_duckdb/test/regression/tmp_check/log/postmaster.log

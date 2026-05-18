@@ -1,0 +1,128 @@
+/*
+ * pgducklake_duckdb.cpp -- DuckLake catalog lifecycle in DuckDB
+ *
+ * Manages the "pgducklake" DuckLake catalog attached inside DuckDB.
+ * Three lifecycles exist:
+ *
+ *   _PG_init() (once per backend):
+ *     DuckLakeMetadataManager::Register("pgducklake", ...)
+ *
+ *   First CREATE EXTENSION (DuckDB not yet initialized):
+ *     ducklake_initialize()          -- SQL script entry point
+ *       -> ExecuteDuckDBQuery("SELECT 1")
+ *           -> DuckDBManager::Initialize()
+ *               -> ducklake_load_extension()   [callback from pg_duckdb]
+ *                   -> LoadStaticExtension
+ *                   -> ducklake_attach_catalog()
+ *
+ *   DROP + CREATE EXTENSION (DuckDB already alive):
+ *     DROP EXTENSION pg_ducklake
+ *       -> DucklakeUtilityHook        [pgducklake_hooks.cpp]
+ *           -> ducklake_detach_catalog()
+ *     CREATE EXTENSION pg_ducklake
+ *       -> ducklake_initialize()
+ *           -> ExecuteDuckDBQuery("SELECT 1")   (no-op, DuckDB exists)
+ *           -> ducklake_attach_catalog()        (catalog was detached)
+ *
+ *   duckdb.recycle_ddb() (DuckDB instance destroyed and recreated):
+ *     recycle_ddb()
+ *       -> DuckDBManager::Reset()               [destroys DuckDB instance]
+ *     next query
+ *       -> DuckDBManager::Initialize()
+ *           -> ducklake_load_extension()         [callback from pg_duckdb]
+ *               -> LoadStaticExtension
+ *               -> ducklake_attach_catalog()
+ *     (metadata manager already registered in _PG_init, no re-registration)
+ *
+ * Query execution against DuckDB is handled via pg_duckdb's raw_query() UDF
+ * through PostgreSQL's SPI in the PostgreSQL-facing translation units.
+ */
+
+#include "pgducklake/pgducklake_defs.hpp"
+#include "pgducklake/pgducklake_duckdb.hpp"
+#include "pgducklake/pgducklake_duckdb_query.hpp"
+#include "pgducklake/pgducklake_functions.hpp"
+#include "pgducklake/pgducklake_time_travel.hpp"
+
+#include "duckdb/main/database.hpp"
+#include "ducklake_extension.hpp"
+
+#include <filesystem>
+
+extern "C" {
+#include "postgres.h"
+
+#include "commands/extension.h"
+#include "miscadmin.h"
+#include "utils/elog.h"
+}
+
+static duckdb::DuckDB *ducklake_duckdb_instance = nullptr;
+
+duckdb::DuckDB *ducklake_get_duckdb_database() {
+  return ducklake_duckdb_instance;
+}
+
+void ducklake_detach_catalog() {
+  const char *errmsg;
+  int ret = pgducklake::ExecuteDuckDBQuery("DETACH DATABASE IF EXISTS " PGDUCKLAKE_DUCKDB_CATALOG, &errmsg);
+  if (ret != 0) {
+    elog(WARNING, "Failed to detach DuckLake catalog: %s", errmsg ? errmsg : "unknown error");
+  }
+}
+
+void ducklake_attach_catalog() {
+  /* METADATA_CATALOG points the DuckLakeTransaction metadata connection's
+   * search path at the pgducklake catalog itself (instead of the default
+   * __ducklake_metadata_pgducklake, which does not exist because pg_ducklake
+   * keeps metadata in PostgreSQL, not in a separate DuckDB database).
+   * This lets DuckDB-native queries (read_blob, etc.) on the metadata
+   * connection resolve system functions through normal catalog search. */
+  duckdb::string query =
+      "ATTACH 'ducklake:" PGDUCKLAKE_DUCKDB_CATALOG ":' AS " PGDUCKLAKE_DUCKDB_CATALOG
+      "(METADATA_SCHEMA " PGDUCKLAKE_PG_SCHEMA_QUOTED ", METADATA_CATALOG " PGDUCKLAKE_DUCKDB_CATALOG;
+  if (creating_extension) {
+    /* First-time init: create local data directory and pass it as DATA_PATH
+     * so DuckLake stores it in the catalog metadata. */
+    auto data_path = duckdb::StringUtil::Format("%s/pg_ducklake", DataDir);
+    try {
+      std::filesystem::create_directory(data_path);
+    } catch (const std::filesystem::filesystem_error &e) {
+      ereport(ERROR, (errcode(ERRCODE_IO_ERROR),
+                      errmsg("failed to create DuckLake data directory \"%s\": %s", data_path.c_str(), e.what())));
+    }
+    query += ", DATA_PATH '" + data_path + "'";
+  }
+  /* On subsequent ATTACHes, omit DATA_PATH so DuckLake reads it from its
+   * stored catalog metadata. This avoids mismatch errors when the data_path
+   * has been changed (e.g. to an S3 bucket via ducklake.set_option). */
+  query += ")";
+
+  elog(DEBUG1, "Executing query: %s", query.c_str());
+
+  const char *errmsg;
+  int ret = pgducklake::ExecuteDuckDBQuery(query.c_str(), &errmsg);
+
+  if (ret != 0) {
+    elog(ERROR, "Failed to attach DuckLake catalog: %s", errmsg);
+  }
+}
+
+namespace pgducklake {
+void ResetDirectInsertCaches();
+} // namespace pgducklake
+
+void ducklake_load_extension(duckdb::DuckDB &db) {
+  ducklake_duckdb_instance = &db;
+  pgducklake::ResetDirectInsertCaches();
+  db.LoadStaticExtension<duckdb::DucklakeExtension>();
+  pgducklake::RegisterTimeTravelFunction(*db.instance);
+  pgducklake::RegisterWrapperMacros(*db.instance);
+  pgducklake::RegisterScalarMacros(*db.instance);
+  pgducklake::RegisterCleanupFunction(*db.instance);
+  pgducklake::RegisterCleanupOrphanedFilesFunction(*db.instance);
+  pgducklake::RegisterCompactionFunctions(*db.instance);
+  pgducklake::RegisterFlushInlinedDataFunction(*db.instance);
+
+  ducklake_attach_catalog();
+}

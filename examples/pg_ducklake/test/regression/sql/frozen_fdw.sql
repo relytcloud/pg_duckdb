@@ -1,0 +1,77 @@
+-- Regression tests for ducklake_fdw (frozen DuckLake mode)
+
+-- Validation: frozen_url + dbname -> error
+CREATE SERVER frozen_bad_1
+    FOREIGN DATA WRAPPER ducklake_fdw
+    OPTIONS (frozen_url 'https://example.com/test.ducklake', dbname 'mydb');
+
+-- Validation: frozen_url + metadata_schema -> error
+CREATE SERVER frozen_bad_2
+    FOREIGN DATA WRAPPER ducklake_fdw
+    OPTIONS (frozen_url 'https://example.com/test.ducklake', metadata_schema 'myschema');
+
+-- Validation: frozen_url + updatable 'true' -> error
+CREATE SERVER frozen_bad_3
+    FOREIGN DATA WRAPPER ducklake_fdw
+    OPTIONS (frozen_url 'https://example.com/test.ducklake', updatable 'true');
+
+-- Setup: create and freeze our own test data
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+
+CREATE TABLE frozen_src (id int, name text, score numeric(5,2)) USING ducklake;
+INSERT INTO frozen_src VALUES
+    (1, 'Alice', 95.50),
+    (2, 'Bob', 87.00),
+    (3, 'Charlie', 92.75),
+    (4, 'Diana', 88.25),
+    (5, 'Eve', 91.00);
+
+CALL ducklake.freeze('/tmp/pg_ducklake_frozen_fdw_test.ducklake');
+
+DROP TABLE frozen_src;
+
+-- Create frozen server
+CREATE SERVER frozen_test
+    FOREIGN DATA WRAPPER ducklake_fdw
+    OPTIONS (frozen_url '/tmp/pg_ducklake_frozen_fdw_test.ducklake');
+
+-- Explicit columns: allowed (subset)
+CREATE FOREIGN TABLE frozen_explicit_cols (id int)
+    SERVER frozen_test
+    OPTIONS (schema_name 'public', table_name 'frozen_src');
+
+SELECT * FROM frozen_explicit_cols ORDER BY id LIMIT 3;
+
+DROP FOREIGN TABLE frozen_explicit_cols;
+
+-- Create foreign table with auto-inferred columns
+CREATE FOREIGN TABLE frozen_src_fdw ()
+    SERVER frozen_test
+    OPTIONS (schema_name 'public', table_name 'frozen_src');
+
+-- SELECT + ORDER BY + LIMIT
+SELECT * FROM frozen_src_fdw ORDER BY name LIMIT 3;
+
+-- Aggregation
+SELECT count(*) FROM frozen_src_fdw;
+
+-- READ-ONLY enforcement
+INSERT INTO frozen_src_fdw VALUES (6, 'Frank', 80.00);
+UPDATE frozen_src_fdw SET name = 'test' WHERE id = 1;
+DELETE FROM frozen_src_fdw WHERE id = 1;
+
+-- IMPORT FOREIGN SCHEMA from frozen server
+CREATE SCHEMA frozen_import;
+IMPORT FOREIGN SCHEMA public FROM SERVER frozen_test INTO frozen_import;
+
+\d frozen_import.*
+
+SELECT * FROM frozen_import.frozen_src ORDER BY id LIMIT 3;
+
+DROP SCHEMA frozen_import CASCADE;
+
+-- Cleanup
+DROP FOREIGN TABLE frozen_src_fdw;
+DROP SERVER frozen_test;
+CALL ducklake.set_option('data_inlining_row_limit', 0);
+\! rm -f /tmp/pg_ducklake_frozen_fdw_test.ducklake

@@ -1,0 +1,10 @@
+.git
+!.git/modules/third_party/pg_duckdb/third_party/duckdb/HEAD
+*.o
+*.so
+*.dylib
+*.bc
+.deps
+Dockerfile
+third_party/pg_duckdb/third_party/duckdb/build
+third_party/ducklake/build

@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git worktree list --porcelain | awk 'NR==1{print $2}')/.claude/hooks/worktree-setup.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.cpp|*.hpp|*.h) clang-format -i \"$f\" ;; esac; } 2>/dev/null || true",
+            "statusMessage": "Formatting C++..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "ExitWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git worktree list --porcelain | awk 'NR==1{print $2}')/.claude/hooks/worktree-cleanup.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

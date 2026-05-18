@@ -1,0 +1,43 @@
+-- Table AM 'ducklake' is created once the extension is installed
+SELECT extname, extowner, extnamespace, extrelocatable, extversion, extconfig, extcondition FROM pg_extension;
+   extname   | extowner | extnamespace | extrelocatable | extversion | extconfig | extcondition 
+-------------+----------+--------------+----------------+------------+-----------+--------------
+ plpgsql     |       10 |           11 | f              | 1.0        |           | 
+ pg_duckdb   |       10 |         2200 | f              | 1.1.0      |           | 
+ pg_ducklake |       10 |         2200 | f              | 0.1.0      |           | 
+(3 rows)
+
+SELECT amname FROM pg_am WHERE amname = 'ducklake';
+  amname  
+----------
+ ducklake
+(1 row)
+
+CREATE TABLE t (a int) USING ducklake;
+SELECT relname
+FROM pg_class
+WHERE relam = (SELECT oid FROM pg_am WHERE amname = 'ducklake');
+ relname 
+---------
+ t
+(1 row)
+
+DROP TABLE t;
+DROP EXTENSION pg_ducklake;
+SELECT oid FROM pg_namespace WHERE nspname = 'ducklake';
+ oid 
+-----
+(0 rows)
+
+CREATE EXTENSION pg_ducklake;
+-- Verify catalog works after DROP+CREATE in same backend
+CREATE TABLE t2 (a int, b text) USING ducklake;
+INSERT INTO t2 VALUES (1, 'hello'), (2, 'world');
+SELECT * FROM t2;
+ a |   b   
+---+-------
+ 1 | hello
+ 2 | world
+(2 rows)
+
+DROP TABLE t2;
