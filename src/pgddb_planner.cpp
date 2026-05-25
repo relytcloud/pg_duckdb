@@ -1,17 +1,17 @@
-#include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgddb/pgddb_planner.hpp"
 
 #include "duckdb.hpp"
 
 #include "pgddb/catalog/pgddb_transaction.hpp"
 #include "pgddb/scan/postgres_scan.hpp"
 #include "pgddb/pgddb_types.hpp"
-#include "pgduckdb/pgduckdb_planner.hpp"
 
 extern "C" {
 #include "postgres.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/nodes.h"
 #include "nodes/params.h"
 #include "optimizer/optimizer.h"
@@ -33,13 +33,63 @@ extern "C" {
 }
 
 #include "pgddb/pgddb_duckdb.hpp"
-#include "pgduckdb/pgduckdb_node.hpp"
+#include "pgddb/pgddb_node.hpp"
+#include "pgddb/pgddb_table_am.hpp"
 #include "pgddb/vendor/pg_list.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 #include "pgddb/pgddb_types.hpp"
 
+namespace pgddb {
+
+/*
+ * Returns true if any RangeTblEntry in the query (or its sub-queries /
+ * sub-expressions) references a Postgres heap table -- i.e. a relation
+ * whose table AM is NOT registered with libpgddb (not a duckdb-y AM).
+ *
+ * Used by the CustomScan to decide whether streaming DuckDB results
+ * back to PG is safe: if the query references a regular Postgres table,
+ * concurrent access to PG resources during stream-fetch could race, so
+ * we materialize fully instead. See
+ * https://github.com/duckdb/pg_duckdb/discussions/866 for the motivating
+ * scenario.
+ */
+bool
+ContainsPostgresTable(Node *node, void *context) {
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Query)) {
+		Query *query = (Query *)node;
+		foreach_node(RangeTblEntry, rte, query->rtable) {
+			if (rte->relid == InvalidOid) {
+				continue;
+			}
+			char relkind = get_rel_relkind(rte->relid);
+			if (relkind == RELKIND_VIEW) {
+				/* Any tables referenced in the view will also be in the rtable */
+				continue;
+			}
+			if (pgddb::TableAmGetName(rte->relid) == nullptr) {
+				return true;
+			}
+		}
+
+#if PG_VERSION_NUM >= 160000
+		return query_tree_walker(query, ContainsPostgresTable, context, 0);
+#else
+		return query_tree_walker(query, (bool (*)())((void *)ContainsPostgresTable), context, 0);
+#endif
+	}
+
+#if PG_VERSION_NUM >= 160000
+	return expression_tree_walker(node, ContainsPostgresTable, context);
+#else
+	return expression_tree_walker(node, (bool (*)())((void *)ContainsPostgresTable), context);
+#endif
+}
+
 duckdb::unique_ptr<duckdb::PreparedStatement>
-DuckdbPrepare(const Query *query, const char *explain_prefix) {
+Prepare(const Query *query, const char *explain_prefix) {
 	Query *copied_query = (Query *)copyObjectImpl(query);
 	const char *query_string = pgddb_get_querydef(copied_query);
 
@@ -60,7 +110,7 @@ CreatePlan(Query *query, bool throw_error) {
 	 * Prepare the query, se we can get the returned types and column names.
 	 */
 
-	duckdb::unique_ptr<duckdb::PreparedStatement> prepared_query = DuckdbPrepare(query);
+	duckdb::unique_ptr<duckdb::PreparedStatement> prepared_query = Prepare(query);
 
 	if (prepared_query->HasError()) {
 		elog(elevel, "(PGDuckDB/CreatePlan) Prepared query returned an error: %s", prepared_query->GetError().c_str());
@@ -116,7 +166,7 @@ CreatePlan(Query *query, bool throw_error) {
 	}
 
 	duckdb_node->custom_private = list_make1(query);
-	duckdb_node->methods = &duckdb_scan_scan_methods;
+	duckdb_node->methods = &scan_methods;
 
 	return (Plan *)duckdb_node;
 }
@@ -186,7 +236,7 @@ check_view_perms_recursive(Query *query) {
 }
 
 PlannedStmt *
-DuckdbPlanNode(Query *parse, int cursor_options, bool throw_error) {
+PlanNode(Query *parse, int cursor_options, bool throw_error) {
 
 	/* Properly check perms if there's a view or WITH statement */
 	check_view_perms_recursive(parse);
@@ -240,3 +290,5 @@ DuckdbPlanNode(Query *parse, int cursor_options, bool throw_error) {
 
 	return result;
 }
+
+} // namespace pgddb

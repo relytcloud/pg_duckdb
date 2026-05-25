@@ -3,8 +3,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/exception.hpp"
 
-#include "pgduckdb/pgduckdb_hooks.hpp"
-#include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgddb/pgddb_planner.hpp"
 #include "pgddb/pgddb_types.hpp"
 #include "pgddb/vendor/pg_explain.hpp"
 #include "pgddb/pg/explain.hpp"
@@ -17,21 +16,23 @@ extern "C" {
 #include "utils/ruleutils.h"
 }
 
-#include "pgduckdb/pgduckdb_node.hpp"
+#include "pgddb/pgddb_node.hpp"
 #include "pgddb/pgddb_duckdb.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 
-bool duckdb_explain_analyze = false;
-bool duckdb_explain_ctas = false;
-duckdb::ExplainFormat duckdb_explain_format = duckdb::ExplainFormat::DEFAULT;
+namespace pgddb {
 
-#define NEED_JSON_PLAN(explain_format) (explain_format == duckdb::ExplainFormat::JSON)
+bool explain_analyze = false;
+bool explain_ctas = false;
+duckdb::ExplainFormat explain_format = duckdb::ExplainFormat::DEFAULT;
+
+#define NEED_JSON_PLAN(fmt) ((fmt) == duckdb::ExplainFormat::JSON)
 
 /* global variables */
-CustomScanMethods duckdb_scan_scan_methods;
+CustomScanMethods scan_methods;
 
 /* static variables */
-static CustomExecMethods duckdb_scan_exec_methods;
+static CustomExecMethods scan_exec_methods;
 
 typedef struct DuckdbScanState {
 	CustomScanState css; /* must be first field */
@@ -78,7 +79,7 @@ Duckdb_CreateCustomScanState(CustomScan *cscan) {
 	duckdb_scan_state->custom_scan = cscan;
 
 	duckdb_scan_state->query = (const Query *)linitial(cscan->custom_private);
-	custom_scan_state->methods = &duckdb_scan_exec_methods;
+	custom_scan_state->methods = &scan_exec_methods;
 	return (Node *)custom_scan_state;
 }
 
@@ -93,27 +94,27 @@ Duckdb_BeginCustomScan_Cpp(CustomScanState *cscanstate, EState *estate, int /*ef
 	if (is_explain_query) {
 		appendStringInfoString(explain_prefix, "EXPLAIN ");
 
-		if (NEED_JSON_PLAN(duckdb_explain_format))
+		if (NEED_JSON_PLAN(explain_format))
 			appendStringInfoChar(explain_prefix, '(');
 
-		if (duckdb_explain_analyze) {
-			if (duckdb_explain_ctas) {
+		if (explain_analyze) {
+			if (explain_ctas) {
 				throw duckdb::NotImplementedException(
 				    "Cannot use EXPLAIN ANALYZE with CREATE TABLE ... AS when using DuckDB execution");
 			}
-			if (NEED_JSON_PLAN(duckdb_explain_format))
+			if (NEED_JSON_PLAN(explain_format))
 				appendStringInfoString(explain_prefix, "ANALYZE, ");
 			else
 				appendStringInfoString(explain_prefix, "ANALYZE ");
 		}
 
-		if (NEED_JSON_PLAN(duckdb_explain_format)) {
+		if (NEED_JSON_PLAN(explain_format)) {
 			appendStringInfoString(explain_prefix, "FORMAT JSON )");
 		}
 	}
 
 	duckdb::unique_ptr<duckdb::PreparedStatement> prepared_query =
-	    DuckdbPrepare(duckdb_scan_state->query, explain_prefix->data);
+	    Prepare(duckdb_scan_state->query, explain_prefix->data);
 
 	if (prepared_query->HasError()) {
 		throw duckdb::Exception(duckdb::ExceptionType::EXECUTOR,
@@ -198,7 +199,7 @@ ExecuteQuery(DuckdbScanState *state) {
 	// result. This is required for cases like CTAS from a Postgres table, where allowing streaming results could lead
 	// to race conditions on Postgres resources.
 	// Checkout discussion: https://github.com/duckdb/pg_duckdb/discussions/866
-	bool allow_stream_result = !pgduckdb::ContainsPostgresTable((Node *)state->query, NULL);
+	bool allow_stream_result = !pgddb::ContainsPostgresTable((Node *)state->query, NULL);
 	auto pending = prepared.PendingQuery(named_values, allow_stream_result);
 	if (pending->HasError()) {
 		return pending->ThrowError();
@@ -266,6 +267,29 @@ Duckdb_ExecCustomScan_Cpp(CustomScanState *node) {
 		bool already_executed = duckdb_scan_state->is_executed;
 		if (!already_executed) {
 			ExecuteQuery(duckdb_scan_state);
+
+			// For non-SELECT statements, PG's ExecutePlan only updates
+			// es_processed from inside ModifyTable. Since we've replaced
+			// the whole plan with this CustomScan, PG never sees a row
+			// count. DuckDB's INSERT/UPDATE/DELETE/MERGE result has the
+			// form (Count BIGINT) -- read it, push it into es_processed,
+			// and end the scan so the empty tuple PG receives is just
+			// "no RETURNING rows".
+			if (duckdb_scan_state->query->commandType != CMD_SELECT) {
+				auto chunk = duckdb_scan_state->query_results->Fetch();
+				uint64_t processed = 0;
+				if (chunk && chunk->size() > 0 && chunk->ColumnCount() > 0) {
+					try {
+						processed = chunk->GetValue(0, 0).GetValue<uint64_t>();
+					} catch (...) {
+						// Result wasn't a single Count column; leave 0.
+					}
+				}
+				duckdb_scan_state->css.ss.ps.state->es_processed = processed;
+				MemoryContextReset(duckdb_scan_state->css.ss.ps.ps_ExprContext->ecxt_per_tuple_memory);
+				ExecClearTuple(slot);
+				return slot;
+			}
 		}
 
 		if (duckdb_scan_state->fetch_next) {
@@ -362,7 +386,7 @@ Duckdb_ReScanCustomScan(CustomScanState * /*node*/) {
 void
 Duckdb_ExplainCustomScan_Cpp(CustomScanState *node, ExplainState *es) {
 	/*
-	 * XXX: The code to set duckdb_explain_analyze and duckdb_explain_format,
+	 * XXX: The code to set explain_analyze and explain_format,
 	 * is copied from ExplainOneQueryHook. Sadly that hook is not run for
 	 * EXPLAIN EXECUTE ..., and the code here runs too late to actually impact
 	 * the query that we send to DuckDB. However, putting it here as well is a
@@ -371,8 +395,8 @@ Duckdb_ExplainCustomScan_Cpp(CustomScanState *node, ExplainState *es) {
 	 * the intended output. Since EXPLAIN EXECUTE is pretty rare for people to
 	 * run, we consider this fine for now.
 	 */
-	duckdb_explain_analyze = pgddb::pg::IsExplainAnalyze(es);
-	duckdb_explain_format = pgddb::pg::DuckdbExplainFormat(es);
+	explain_analyze = pgddb::pg::IsExplainAnalyze(es);
+	explain_format = pgddb::pg::DuckdbExplainFormat(es);
 
 	DuckdbScanState *duckdb_scan_state = (DuckdbScanState *)node;
 	ExecuteQuery(duckdb_scan_state);
@@ -392,7 +416,7 @@ Duckdb_ExplainCustomScan_Cpp(CustomScanState *node, ExplainState *es) {
 
 	std::ostringstream explain_output;
 	explain_output << "\n\n" << value << "\n";
-	if (NEED_JSON_PLAN(duckdb_explain_format)) {
+	if (NEED_JSON_PLAN(explain_format)) {
 
 		// Formatting, copied formatting in JSON mode
 		if (linitial_int(es->grouping_stack) != 0)
@@ -427,27 +451,29 @@ Duckdb_ExplainCustomScan(CustomScanState *node, List * /*ancestors*/, ExplainSta
 }
 
 void
-DuckdbInitNode() {
+InitNode() {
 	/* setup scan methods */
-	memset(&duckdb_scan_scan_methods, 0, sizeof(duckdb_scan_scan_methods));
-	duckdb_scan_scan_methods.CustomName = "DuckDBScan";
-	duckdb_scan_scan_methods.CreateCustomScanState = Duckdb_CreateCustomScanState;
-	RegisterCustomScanMethods(&duckdb_scan_scan_methods);
+	memset(&scan_methods, 0, sizeof(scan_methods));
+	scan_methods.CustomName = "DuckDBScan";
+	scan_methods.CreateCustomScanState = Duckdb_CreateCustomScanState;
+	RegisterCustomScanMethods(&scan_methods);
 
 	/* setup exec methods */
-	memset(&duckdb_scan_exec_methods, 0, sizeof(duckdb_scan_exec_methods));
-	duckdb_scan_exec_methods.CustomName = "DuckDBScan";
+	memset(&scan_exec_methods, 0, sizeof(scan_exec_methods));
+	scan_exec_methods.CustomName = "DuckDBScan";
 
-	duckdb_scan_exec_methods.BeginCustomScan = Duckdb_BeginCustomScan;
-	duckdb_scan_exec_methods.ExecCustomScan = Duckdb_ExecCustomScan;
-	duckdb_scan_exec_methods.EndCustomScan = Duckdb_EndCustomScan;
-	duckdb_scan_exec_methods.ReScanCustomScan = Duckdb_ReScanCustomScan;
+	scan_exec_methods.BeginCustomScan = Duckdb_BeginCustomScan;
+	scan_exec_methods.ExecCustomScan = Duckdb_ExecCustomScan;
+	scan_exec_methods.EndCustomScan = Duckdb_EndCustomScan;
+	scan_exec_methods.ReScanCustomScan = Duckdb_ReScanCustomScan;
 
-	duckdb_scan_exec_methods.EstimateDSMCustomScan = NULL;
-	duckdb_scan_exec_methods.InitializeDSMCustomScan = NULL;
-	duckdb_scan_exec_methods.ReInitializeDSMCustomScan = NULL;
-	duckdb_scan_exec_methods.InitializeWorkerCustomScan = NULL;
-	duckdb_scan_exec_methods.ShutdownCustomScan = NULL;
+	scan_exec_methods.EstimateDSMCustomScan = NULL;
+	scan_exec_methods.InitializeDSMCustomScan = NULL;
+	scan_exec_methods.ReInitializeDSMCustomScan = NULL;
+	scan_exec_methods.InitializeWorkerCustomScan = NULL;
+	scan_exec_methods.ShutdownCustomScan = NULL;
 
-	duckdb_scan_exec_methods.ExplainCustomScan = Duckdb_ExplainCustomScan;
+	scan_exec_methods.ExplainCustomScan = Duckdb_ExplainCustomScan;
 }
+
+} // namespace pgddb

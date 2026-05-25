@@ -16,15 +16,12 @@ void InitRuleutilsHooks();
 extern "C" {
 
 /*
- * DDL deparsers. These compose CREATE TABLE / ALTER TABLE / RENAME / CREATE
- * VIEW statements for DuckDB. They have pg_duckdb-specific policy
- * (MotherDuck checks, duckdb table-AM, duckdb.row arguments) interleaved
- * with the generic deparse mechanics, so they live consumer-side rather
- * than in libpgddb.
+ * pgduckdb_get_viewdef stays in pg_duckdb: it has pg_duckdb-specific view
+ * handling that pg_ducklake does not exercise. The CREATE TABLE / ALTER
+ * TABLE / RENAME deparsers moved to libpgddb's pgddb_get_tabledef family
+ * (see pgddb/pgddb_ruleutils.h); pg_duckdb's policy is installed via
+ * pgddb_validate_create_table_hook in InitRuleutilsHooks.
  */
-char *pgduckdb_get_tabledef(Oid relation_id);
-char *pgduckdb_get_alter_tabledef(Oid relation_oid, AlterTableStmt *alter_stmt);
-char *pgduckdb_get_rename_relationdef(Oid relation_oid, RenameStmt *rename_stmt);
 char *pgduckdb_get_viewdef(const ViewStmt *stmt, const char *postgres_schema_name, const char *view_name,
                            const char *duckdb_query_string);
 

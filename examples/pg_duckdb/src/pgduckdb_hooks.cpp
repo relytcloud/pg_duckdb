@@ -1,8 +1,9 @@
 #include "duckdb.hpp"
 
-#include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgddb/pgddb_planner.hpp"
 #include "pgddb/pg/transactions.hpp"
 #include "pgddb/pg/explain.hpp"
+#include "pgddb/pgddb_table_am.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
 #include "pgddb/pgddb_utils.hpp"
@@ -34,7 +35,7 @@ extern "C" {
 #include "pgduckdb/utility/copy.hpp"
 #include "pgddb/vendor/pg_explain.hpp"
 #include "pgddb/vendor/pg_list.hpp"
-#include "pgduckdb/pgduckdb_node.hpp"
+#include "pgddb/pgddb_node.hpp"
 #include "pgddb/utility/cpp_wrapper.hpp"
 
 static planner_hook_type prev_planner_hook = NULL;
@@ -67,7 +68,7 @@ ContainsCatalogTable(List *rtes) {
 
 static bool
 IsDuckdbTable(Oid relid) {
-	return pgduckdb::DuckdbTableAmGetName(relid) != nullptr;
+	return pgddb::TableAmGetName(relid) != nullptr;
 }
 
 static bool
@@ -143,40 +144,13 @@ namespace pgduckdb {
 
 int64_t executor_nest_level = 0;
 
+/* ContainsPostgresTable moved to libpgddb (pgddb::ContainsPostgresTable);
+ * see include/pgddb/pgddb_planner.hpp. The hooks.hpp re-export below
+ * keeps the legacy `pgduckdb::ContainsPostgresTable` symbol working for
+ * any consumer that still depends on it. */
 bool
 ContainsPostgresTable(Node *node, void *context) {
-	if (node == NULL)
-		return false;
-
-	if (IsA(node, Query)) {
-		Query *query = (Query *)node;
-		List *rtable = query->rtable;
-		foreach_node(RangeTblEntry, rte, rtable) {
-			if (rte->relid == InvalidOid) {
-				continue;
-			}
-			char relkind = get_rel_relkind(rte->relid);
-			if (relkind == RELKIND_VIEW) {
-				/* Any tables referenced in the view will also be in the rtable */
-				continue;
-			}
-			if (!::IsDuckdbTable(rte->relid)) {
-				return true;
-			}
-		}
-
-#if PG_VERSION_NUM >= 160000
-		return query_tree_walker(query, ContainsPostgresTable, context, 0);
-#else
-		return query_tree_walker(query, (bool (*)())((void *)ContainsPostgresTable), context, 0);
-#endif
-	}
-
-#if PG_VERSION_NUM >= 160000
-	return expression_tree_walker(node, ContainsPostgresTable, context);
-#else
-	return expression_tree_walker(node, (bool (*)())((void *)ContainsPostgresTable), context);
-#endif
+	return pgddb::ContainsPostgresTable(node, context);
 }
 
 bool
@@ -268,10 +242,10 @@ DuckdbPlannerHook_Cpp(Query *parse, const char *query_string, int cursor_options
 			pgduckdb::TriggerActivity();
 			pgduckdb::IsAllowedStatement(parse, true);
 
-			return DuckdbPlanNode(parse, cursor_options, true);
+			return pgddb::PlanNode(parse, cursor_options, true);
 		} else if (pgduckdb::ShouldTryToUseDuckdbExecution(parse)) {
 			pgduckdb::TriggerActivity();
-			PlannedStmt *duckdbPlan = DuckdbPlanNode(parse, cursor_options, false);
+			PlannedStmt *duckdbPlan = pgddb::PlanNode(parse, cursor_options, false);
 			if (duckdbPlan) {
 				return duckdbPlan;
 			}
@@ -324,7 +298,7 @@ IsDuckdbPlan(PlannedStmt *stmt) {
 	}
 
 	CustomScan *custom_scan = castNode(CustomScan, plan);
-	return custom_scan->methods == &duckdb_scan_scan_methods;
+	return custom_scan->methods == &pgddb::scan_methods;
 }
 
 /*
@@ -422,9 +396,9 @@ DuckdbExplainOneQueryHook(Query *query, int cursorOptions, IntoClause *into, Exp
 	 * EXPLAIN queries are also always re-planned (see
 	 * standard_ExplainOneQuery).
 	 */
-	duckdb_explain_analyze = pgddb::pg::IsExplainAnalyze(es);
-	duckdb_explain_format = pgddb::pg::DuckdbExplainFormat(es);
-	duckdb_explain_ctas = into != NULL;
+	pgddb::explain_analyze = pgddb::pg::IsExplainAnalyze(es);
+	pgddb::explain_format = pgddb::pg::DuckdbExplainFormat(es);
+	pgddb::explain_ctas = into != NULL;
 	prev_explain_one_query_hook(query, cursorOptions, into, es, queryString, params, queryEnv);
 }
 

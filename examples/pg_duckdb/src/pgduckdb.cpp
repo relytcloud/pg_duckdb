@@ -9,8 +9,9 @@ extern "C" {
 }
 
 #include "pgduckdb/pgduckdb_background_worker.hpp"
-#include "pgduckdb/pgduckdb_node.hpp"
+#include "pgddb/pgddb_node.hpp"
 #include "pgduckdb/pgduckdb_ruleutils.hpp"
+#include "pgduckdb/pgduckdb_table_am.hpp"
 #include "pgduckdb/pgduckdb_types.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 
@@ -38,8 +39,9 @@ _PG_init(void) {
 	pgduckdb::InitGUCHooks();
 	pgduckdb::InitRuleutilsHooks();
 	pgduckdb::InitTypeHooks();
+	pgduckdb::InitTableAmHook();
 	DuckdbInitHooks();
-	DuckdbInitNode();
+	pgddb::InitNode();
 	pgduckdb::InitBackgroundWorkersShmem();
 	pgduckdb::RegisterDuckdbXactCallback();
 }

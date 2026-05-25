@@ -42,6 +42,18 @@ typedef struct StarReconstructionContext {
  */
 
 typedef char *(*pgddb_function_name_hook_t)(Oid funcid, bool *use_variadic_p);
+// Override the entire qualified relation name the deparser emits. Used by
+// FDW-backed relations whose DuckDB-side name lives in a separately
+// attached catalog (fdw_db_*). Return a freshly palloc'd string with the
+// full quoted name (e.g. "fdw_db_x"."public"."t") or NULL to fall through
+// to the standard pgddb_relation_name -> db_and_schema flow.
+typedef char *(*pgddb_relation_name_hook_t)(Oid relid);
+// Override the column-type name the CREATE TABLE deparser writes for a
+// given PG type. Return a freshly palloc'd string with the DuckDB-side
+// type name (e.g. "VARIANT", "STRUCT") or NULL to fall through to PG's
+// format_type_with_typemod. Lets consumers map a PG-only passthrough
+// type to a DuckDB-known type without parsing PG's textual output.
+typedef char *(*pgddb_column_type_name_hook_t)(Oid type_oid, int32_t typemod);
 typedef bool (*pgddb_is_fake_type_hook_t)(Oid type_oid);
 typedef bool (*pgddb_var_is_row_hook_t)(Var *var);
 typedef Var *(*pgddb_subscript_var_hook_t)(Expr *expr);
@@ -55,6 +67,8 @@ typedef char *(*pgddb_write_row_refname_hook_t)(StringInfo buf, char *refname, b
 typedef List *(*pgddb_db_and_schema_hook_t)(const char *postgres_schema_name, const char *table_am_name);
 
 extern pgddb_function_name_hook_t pgddb_function_name_hook;
+extern pgddb_relation_name_hook_t pgddb_relation_name_hook;
+extern pgddb_column_type_name_hook_t pgddb_column_type_name_hook;
 extern pgddb_is_fake_type_hook_t pgddb_is_fake_type_hook;
 extern pgddb_var_is_row_hook_t pgddb_var_is_row_hook;
 extern pgddb_subscript_var_hook_t pgddb_subscript_var_hook;
@@ -71,6 +85,11 @@ extern pgddb_db_and_schema_hook_t pgddb_db_and_schema_hook;
 static inline char *
 pgddb_function_name(Oid funcid, bool *use_variadic_p) {
 	return pgddb_function_name_hook ? pgddb_function_name_hook(funcid, use_variadic_p) : NULL;
+}
+
+static inline char *
+pgddb_column_type_name(Oid type_oid, int32_t typemod) {
+	return pgddb_column_type_name_hook ? pgddb_column_type_name_hook(type_oid, typemod) : NULL;
 }
 
 static inline bool
@@ -139,6 +158,29 @@ void pgddb_add_tablesample_percent(const char *tsm_name, StringInfo buf, int num
 char *pgddb_relation_name(Oid relid);
 char *pgddb_get_querydef(Query *);
 const char *pgddb_db_and_schema_string(const char *postgres_schema_name, const char *table_am_name);
+
+/*
+ * DDL deparsers. Build CREATE TABLE / ALTER TABLE / RENAME statements for
+ * DuckDB given the corresponding Postgres relation and parsetree. Consumer-
+ * specific policy (e.g. MotherDuck ownership checks) goes through
+ * pgddb_validate_create_table_hook below.
+ */
+struct AlterTableStmt;
+struct RenameStmt;
+char *pgddb_get_tabledef(Oid relation_id);
+char *pgddb_get_alter_tabledef(Oid relation_oid, struct AlterTableStmt *alter_stmt);
+char *pgddb_get_rename_relationdef(Oid relation_oid, struct RenameStmt *rename_stmt);
+
+/*
+ * Validate the relation just before its CREATE TABLE is generated.
+ * Consumer-specific policy: pg_duckdb checks PERMANENT tables are owned by
+ * the MotherDuck role; pg_ducklake's create-table event trigger validates
+ * persistence upstream so leaves the hook null. The hook should
+ * ereport(ERROR) on rejection. Parameter is a Relation, typed as void* so
+ * this header stays cheap.
+ */
+typedef void (*pgddb_validate_create_table_hook_t)(void *relation);
+extern pgddb_validate_create_table_hook_t pgddb_validate_create_table_hook;
 
 extern bool outermost_query;
 

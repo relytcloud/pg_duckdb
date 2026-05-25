@@ -1,10 +1,10 @@
-#include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgddb/pgddb_planner.hpp"
 #include "pgddb/pgddb_utils.hpp"
 #include "pgduckdb/pgduckdb_xact.hpp"
 #include "pgduckdb/pgduckdb_guc.hpp"
 #include "pgduckdb/pgduckdb_ddl.hpp"
 #include "pgduckdb/pgduckdb_hooks.hpp"
-#include "pgduckdb/pgduckdb_planner.hpp"
+#include "pgddb/pgddb_planner.hpp"
 #include "pgddb/pg/string_utils.hpp"
 
 extern "C" {
@@ -265,7 +265,7 @@ EntrenchColumnsFromCall(Query *query, const char *function_call, const char **qu
 	 * different column types).
 	 */
 	pgduckdb::IsAllowedStatement(query, true);
-	PlannedStmt *plan = DuckdbPlanNode(query, CURSOR_OPT_PARALLEL_OK, true);
+	PlannedStmt *plan = pgddb::PlanNode(query, CURSOR_OPT_PARALLEL_OK, true);
 
 	/* This is where our custom code starts again */
 	List *target_list = plan->planTree->targetlist;
@@ -885,7 +885,7 @@ DuckdbHandleRenameViewPre(RenameStmt *stmt) {
 	pgduckdb::ClaimCurrentCommandId();
 
 	auto connection = pgddb::DuckDBManager::GetConnection(true);
-	pgddb::DuckDBManager::DuckDBQueryOrThrow(*connection, pgduckdb_get_rename_relationdef(relation_oid, stmt));
+	pgddb::DuckDBManager::DuckDBQueryOrThrow(*connection, pgddb_get_rename_relationdef(relation_oid, stmt));
 	RelationClose(rel);
 
 	/* Now we need to replace the Postgres view to reference the new name in the duckdb.view(...) call */
@@ -1358,11 +1358,11 @@ DECLARE_PG_FUNCTION(duckdb_create_table_trigger) {
 	}
 
 	/*
-	 * pgduckdb_get_tabledef does a bunch of checks to see if creating the
+	 * pgddb_get_tabledef does a bunch of checks to see if creating the
 	 * table is supported. So, we do call that function first, before creating
 	 * the DuckDB connection and possibly transactions.
 	 */
-	std::string create_table_string(pgduckdb_get_tabledef(relid));
+	std::string create_table_string(pgddb_get_tabledef(relid));
 
 	/* We're going to run multiple queries in DuckDB, so we need to start a
 	 * transaction to ensure ACID guarantees hold. */
@@ -1787,10 +1787,10 @@ DECLARE_PG_FUNCTION(duckdb_alter_table_trigger) {
 	char *alter_table_stmt_string;
 	if (IsA(trigdata->parsetree, AlterTableStmt)) {
 		AlterTableStmt *alter_table_stmt = (AlterTableStmt *)trigdata->parsetree;
-		alter_table_stmt_string = pgduckdb_get_alter_tabledef(relid, alter_table_stmt);
+		alter_table_stmt_string = pgddb_get_alter_tabledef(relid, alter_table_stmt);
 	} else if (IsA(trigdata->parsetree, RenameStmt)) {
 		RenameStmt *rename_stmt = (RenameStmt *)trigdata->parsetree;
-		alter_table_stmt_string = pgduckdb_get_rename_relationdef(relid, rename_stmt);
+		alter_table_stmt_string = pgddb_get_rename_relationdef(relid, rename_stmt);
 	} else {
 		elog(ERROR, "Unexpected parsetree type: %d", nodeTag(trigdata->parsetree));
 	}
