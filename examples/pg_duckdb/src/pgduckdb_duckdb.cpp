@@ -2,6 +2,8 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/optimizer/optimizer_extension.hpp"
+#include "duckdb/storage/storage_extension.hpp"
 
 #include "pgddb/catalog/pgddb_storage.hpp"
 #include "pgddb/pg/guc.hpp"
@@ -79,8 +81,10 @@ DisabledFileSystems() {
 
 } // anonymous namespace
 
+// DuckDB v1.5 removed direct field access on DBConfigOptions for most settings;
+// route everything through SetOptionByName. See duckdb/pg_duckdb#1025.
 #define SET_DUCKDB_OPTION(ddb_option_name)                                                                             \
-	config.options.ddb_option_name = duckdb_##ddb_option_name;                                                         \
+	config.SetOptionByName(#ddb_option_name, duckdb::Value(duckdb_##ddb_option_name));                                 \
 	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
 void
@@ -149,8 +153,11 @@ DuckDBManager::ConnectionString() {
 void
 DuckDBManager::OnPostInit(duckdb::ClientContext &context) {
 	auto &dbconfig = duckdb::DBConfig::GetConfig(*database->instance);
-	dbconfig.storage_extensions["pgduckdb"] = duckdb::make_uniq<::pgddb::PostgresStorageExtension>();
-	dbconfig.optimizer_extensions.push_back(UnsupportedTypeOptimizer::GetOptimizerExtension());
+	// DuckDB v1.5 removed direct push_back / index-assign access on these
+	// vectors; use the new Register helpers. See duckdb/pg_duckdb#1025.
+	duckdb::StorageExtension::Register(dbconfig, "pgduckdb",
+	                                   duckdb::make_shared_ptr<::pgddb::PostgresStorageExtension>());
+	duckdb::OptimizerExtension::Register(dbconfig, UnsupportedTypeOptimizer::GetOptimizerExtension());
 
 	auto &extension_manager = database->instance->GetExtensionManager();
 	auto extension_active_load = extension_manager.BeginLoad("pgduckdb");

@@ -1255,6 +1255,8 @@ GetPostgresArrayDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 		return INT8ARRAYOID;
 	case duckdb::LogicalTypeId::VARCHAR:
 		return type.IsJSONType() ? JSONARRAYOID : TEXTARRAYOID;
+	case duckdb::LogicalTypeId::GEOMETRY:
+		return TEXTARRAYOID;
 	case duckdb::LogicalTypeId::DATE:
 		return DATEARRAYOID;
 	case duckdb::LogicalTypeId::TIMESTAMP:
@@ -1342,6 +1344,8 @@ GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error) {
 		return INT8OID;
 	case duckdb::LogicalTypeId::VARCHAR:
 		return type.IsJSONType() ? JSONOID : TEXTOID;
+	case duckdb::LogicalTypeId::GEOMETRY:
+		return TEXTOID;
 	case duckdb::LogicalTypeId::DATE:
 		return DATEOID;
 	case duckdb::LogicalTypeId::TIMESTAMP:

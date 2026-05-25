@@ -140,7 +140,7 @@ char *duckdb_custom_user_agent = strdup("");
 void
 InitGUC() {
 	::pgddb::duckdb_maximum_memory = 4096; /* 4GB in MB */
-	::pgddb::duckdb_temporary_directory = MakeDirName("temp");
+	::pgddb::duckdb_temp_directory = MakeDirName("temp");
 	::pgddb::duckdb_extension_directory = MakeDirName("extensions");
 
 	/* pg_duckdb specific GUCs */
@@ -208,7 +208,7 @@ InitGUC() {
 	DefineCustomDuckDBVariable(
 	    "duckdb.temporary_directory",
 	    "Set the directory to which DuckDB write temp files, alias for duckdb.temporary_directory",
-	    &::pgddb::duckdb_temporary_directory, PGC_SUSET);
+	    &::pgddb::duckdb_temp_directory, PGC_SUSET);
 
 	DefineCustomDuckDBVariable(
 	    "duckdb.max_temp_directory_size",
@@ -222,10 +222,10 @@ InitGUC() {
 	    &::pgddb::duckdb_extension_directory, PGC_SUSET);
 
 	DefineCustomDuckDBVariable("duckdb.threads", "Maximum number of DuckDB threads per Postgres backend.",
-	                           &::pgddb::duckdb_maximum_threads, -1, 1024, PGC_SUSET);
+	                           &::pgddb::duckdb_threads, -1, 1024, PGC_SUSET);
 	DefineCustomDuckDBVariable("duckdb.worker_threads",
 	                           "Maximum number of DuckDB threads per Postgres backend, alias for duckdb.threads",
-	                           &::pgddb::duckdb_maximum_threads, -1, 1024, PGC_SUSET);
+	                           &::pgddb::duckdb_threads, -1, 1024, PGC_SUSET);
 
 	DefineCustomDuckDBVariable("duckdb.default_collation",
 	                           "The default collation to use for DuckDB queries, e.g., 'en_us'",

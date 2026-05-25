@@ -26,9 +26,9 @@ PGDDB_OBJS := $(PGDDB_CPP_SRCS:.cpp=.o) $(PGDDB_C_SRCS:.c=.o)
 # set to `make` to disable ninja
 DUCKDB_GEN ?= ninja
 # used to know what version of extensions to download
-DUCKDB_VERSION = v1.4.3
+DUCKDB_VERSION = v1.5.2
 # duckdb build tweaks
-DUCKDB_CMAKE_VARS = -DCXX_EXTRA=-fvisibility=default -DBUILD_SHELL=0 -DBUILD_PYTHON=0 -DBUILD_UNITTESTS=0
+DUCKDB_CMAKE_VARS = -DCXX_EXTRA=-fvisibility=default -DBUILD_SHELL=0 -DBUILD_PYTHON=0 -DBUILD_UNITTESTS=0 -DOVERRIDE_GIT_DESCRIBE=v1.5.2
 # set to 1 to disable asserts in DuckDB. This is particularly useful in combinition with MotherDuck.
 # When asserts are enabled the released motherduck extension will fail some of
 # those asserts. By disabling asserts it's possible to run a debug build of
@@ -101,7 +101,8 @@ $(FULL_DUCKDB_LIB): $(PGDDB_DIR)/.git/modules/third_party/duckdb/HEAD $(EXTENSIO
 	cp $(DUCKDB_BUILD_DIR)/src/libduckdb_static.a $(DUCKDB_BUILD_DIR)/bundle/.
 	cp $(DUCKDB_BUILD_DIR)/third_party/*/libduckdb_*.a $(DUCKDB_BUILD_DIR)/bundle/.
 	find $(DUCKDB_BUILD_DIR)/extension -maxdepth 2 \
-		\( -name 'lib*_extension.a' -o -name 'lib*_duckdb.a' \) \
+		\( -name 'lib*_extension.a' -o -name 'lib*_duckdb.a' \
+		   -o -name 'libduckdb_generated_extension_loader.a' \) \
 		-exec cp {} $(DUCKDB_BUILD_DIR)/bundle/. \;
 	find $(DUCKDB_BUILD_DIR)/vcpkg_installed -name '*.a' -exec cp {} $(DUCKDB_BUILD_DIR)/bundle/. \;
 	cd $(DUCKDB_BUILD_DIR)/bundle && \

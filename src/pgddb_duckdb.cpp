@@ -43,11 +43,11 @@ DuckDBManager::ShouldBeginTransaction() {
 	return pgddb::pg::IsInTransactionBlock(true);
 }
 
-char *duckdb_temporary_directory = strdup("");
+char *duckdb_temp_directory = strdup("");
 char *duckdb_extension_directory = strdup("");
 char *duckdb_max_temp_directory_size = strdup("");
 int duckdb_maximum_memory = 0;
-int duckdb_maximum_threads = -1;
+int duckdb_threads = -1;
 
 
 namespace {
@@ -66,13 +66,15 @@ ToString(char *value) {
 
 } // anonymous namespace
 
+// DuckDB v1.5 removed direct field access on DBConfigOptions for most settings;
+// route everything through SetOptionByName. See duckdb/pg_duckdb#1025.
 #define SET_DUCKDB_OPTION(ddb_option_name)                                                                             \
-	config.options.ddb_option_name = duckdb_##ddb_option_name;                                                         \
-	elog(DEBUG2, "[PGDuckDB] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
+	config.SetOptionByName(#ddb_option_name, duckdb::Value(duckdb_##ddb_option_name));                                 \
+	elog(DEBUG2, "[pgddb] Set DuckDB option: '" #ddb_option_name "'=%s", ToString(duckdb_##ddb_option_name).c_str());
 
 void
 DuckDBManager::Initialize() {
-	elog(DEBUG2, "(PGDuckDB/DuckDBManager) Creating DuckDB instance");
+	elog(DEBUG2, "(pgddb/DuckDBManager) Creating DuckDB instance");
 
 	// Block signals before initializing DuckDB to ensure signal is handled by the Postgres main thread only
 	pgddb::ThreadSignalBlockGuard guard;
@@ -82,10 +84,10 @@ DuckDBManager::Initialize() {
 
 	OnInit(config);
 
-	SET_DUCKDB_OPTION(temporary_directory);
+	SET_DUCKDB_OPTION(temp_directory);
 	SET_DUCKDB_OPTION(extension_directory);
-	if (duckdb_temporary_directory && strlen(duckdb_temporary_directory) > 0) {
-		std::filesystem::create_directories(duckdb_temporary_directory);
+	if (duckdb_temp_directory && strlen(duckdb_temp_directory) > 0) {
+		std::filesystem::create_directories(duckdb_temp_directory);
 	}
 	if (duckdb_extension_directory && strlen(duckdb_extension_directory) > 0) {
 		std::filesystem::create_directories(duckdb_extension_directory);
@@ -97,15 +99,15 @@ DuckDBManager::Initialize() {
 		// parser. This ensures the value is interpreted correctly by DuckDB.
 		std::string memory_limit = std::to_string(duckdb_maximum_memory) + "MiB";
 		config.options.maximum_memory = duckdb::DBConfig::ParseMemoryLimit(memory_limit);
-		elog(DEBUG2, "[PGDuckDB] Set DuckDB option: 'maximum_memory'=%dMB", duckdb_maximum_memory);
+		elog(DEBUG2, "[pgddb] Set DuckDB option: 'maximum_memory'=%dMB", duckdb_maximum_memory);
 	}
 	if (duckdb_max_temp_directory_size != NULL && strlen(duckdb_max_temp_directory_size) != 0) {
 		config.SetOptionByName("max_temp_directory_size", duckdb_max_temp_directory_size);
-		elog(DEBUG2, "[PGDuckDB] Set DuckDB option: 'max_temp_directory_size'=%s", duckdb_max_temp_directory_size);
+		elog(DEBUG2, "[pgddb] Set DuckDB option: 'max_temp_directory_size'=%s", duckdb_max_temp_directory_size);
 	}
 
-	if (duckdb_maximum_threads > -1) {
-		SET_DUCKDB_OPTION(maximum_threads);
+	if (duckdb_threads > -1) {
+		SET_DUCKDB_OPTION(threads);
 	}
 
 	std::string connection_string;

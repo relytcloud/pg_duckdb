@@ -113,7 +113,7 @@ public:
 };
 
 // Set the directory to which DuckDB writes temp files
-extern char *duckdb_temporary_directory;
+extern char *duckdb_temp_directory;
 // Set the directory to where DuckDB stores extensions in
 extern char *duckdb_extension_directory;
 // The maximum amount of data stored inside DuckDB's 'temp_directory' (when set) (e.g., 1GB)
@@ -121,6 +121,6 @@ extern char *duckdb_max_temp_directory_size;
 // The maximum memory DuckDB can use in MB (e.g., 4096 for 4GB)
 extern int duckdb_maximum_memory;
 // Maximum number of DuckDB threads per Postgres backend
-extern int duckdb_maximum_threads;
+extern int duckdb_threads;
 
 } // namespace pgddb
