@@ -31,21 +31,17 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/prepared_statement.hpp"
 
-/* Forward-declare pg_duckdb type-mapping functions (from pgduckdb_types.hpp,
- * which cannot be included directly due to its cpp_only_file guard). */
-namespace pgduckdb {
-unsigned int GetPostgresDuckDBType(const duckdb::LogicalType &type, bool throw_error = false);
-int32_t GetPostgresDuckDBTypemod(const duckdb::LogicalType &type);
-} // namespace pgduckdb
-
+#include "pgddb/pgddb_duckdb.hpp"
+#include "pgddb/pgddb_types.hpp"
 #include "pgducklake/pgducklake_duckdb.hpp"
 #include "pgducklake/pgducklake_duckdb_query.hpp"
 #include "pgducklake/pgducklake_fdw.hpp"
-#include "pgduckdb/pgduckdb_contracts.hpp"
 #include "pgducklake/utility/cpp_wrapper.hpp"
 
 extern "C" {
 #include "postgres.h"
+
+#include "pgddb/pgddb_ruleutils.h"
 
 #include "access/reloptions.h"
 #include "access/xact.h"
@@ -254,6 +250,44 @@ static void AttachDucklakeDatabase(ForeignServer *server) {
  * Query-tree walker: ATTACH databases and block DML
  * ---------------------------------------------------------------- */
 
+// Returns true if any RTE under `query` references a ducklake_fdw
+// foreign table. Walks subqueries and CTEs. Used by the planner hook
+// alongside QueryReferencesRegisteredTableAm so that foreign-table
+// queries route through DuckDB rather than hitting the FDW direct-scan
+// stub (which errors out by design).
+bool pgducklake::QueryReferencesDucklakeForeignTable(Query *query) {
+  if (!query)
+    return false;
+
+  Oid fdw_oid = GetDucklakeFdwOid();
+  if (fdw_oid == InvalidOid)
+    return false;
+
+  ListCell *lc;
+  foreach (lc, query->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+    if (rte->rtekind == RTE_SUBQUERY && rte->subquery) {
+      if (pgducklake::QueryReferencesDucklakeForeignTable(rte->subquery))
+        return true;
+      continue;
+    }
+    if (rte->relid == InvalidOid)
+      continue;
+    if (get_rel_relkind(rte->relid) != RELKIND_FOREIGN_TABLE)
+      continue;
+    ForeignTable *ft = GetForeignTable(rte->relid);
+    ForeignServer *server = GetForeignServer(ft->serverid);
+    if (server->fdwid == fdw_oid)
+      return true;
+  }
+  foreach (lc, query->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    if (IsA(cte->ctequery, Query) && pgducklake::QueryReferencesDucklakeForeignTable(castNode(Query, cte->ctequery)))
+      return true;
+  }
+  return false;
+}
+
 void pgducklake::RegisterForeignTablesInQuery(Query *query) {
   if (!query || !query->rtable)
     return;
@@ -328,7 +362,7 @@ void pgducklake::RegisterForeignTablesInQuery(Query *query) {
 
 static List *InferForeignTableColumns(CreateForeignTableStmt *stmt) {
   /* Ensure DuckDB is initialized (triggers pg_duckdb startup via SPI) */
-  if (!pgduckdb::DuckdbIsInitialized()) {
+  if (!pgddb::DuckDBManager::IsInitialized()) {
     const char *errmsg;
     pgducklake::ExecuteDuckDBQuery("SELECT 1", &errmsg);
   }
@@ -376,8 +410,8 @@ static List *InferForeignTableColumns(CreateForeignTableStmt *stmt) {
   auto &types = prepared->GetTypes();
 
   for (size_t i = 0; i < names.size(); i++) {
-    Oid pg_type = pgduckdb::GetPostgresDuckDBType(types[i]);
-    int32_t typemod = pgduckdb::GetPostgresDuckDBTypemod(types[i]);
+    Oid pg_type = pgddb::GetPostgresDuckDBType(types[i]);
+    int32_t typemod = pgddb::GetPostgresDuckDBTypemod(types[i]);
 
     ColumnDef *col = makeColumnDef(names[i].c_str(), pg_type, typemod, InvalidOid);
     columns = lappend(columns, col);
@@ -392,7 +426,7 @@ static List *InferForeignTableColumns(CreateForeignTableStmt *stmt) {
 
 static List *DucklakeImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid) {
   /* Ensure DuckDB is initialized */
-  if (!pgduckdb::DuckdbIsInitialized()) {
+  if (!pgddb::DuckDBManager::IsInitialized()) {
     const char *errmsg;
     pgducklake::ExecuteDuckDBQuery("SELECT 1", &errmsg);
   }
@@ -482,8 +516,8 @@ static List *DucklakeImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serv
       StringInfoData col_buf;
       initStringInfo(&col_buf);
       for (size_t i = 0; i < names.size(); i++) {
-        Oid pg_type = pgduckdb::GetPostgresDuckDBType(types[i]);
-        int32_t typemod = pgduckdb::GetPostgresDuckDBTypemod(types[i]);
+        Oid pg_type = pgddb::GetPostgresDuckDBType(types[i]);
+        int32_t typemod = pgddb::GetPostgresDuckDBTypemod(types[i]);
         char *type_name = format_type_with_typemod(pg_type, typemod);
 
         if (i > 0)
@@ -667,8 +701,11 @@ DECLARE_PG_FUNCTION(ducklake_fdw_validator) {
 namespace pgducklake {
 
 void InitFDW() {
-  pgduckdb::RegisterDuckdbExternalTableCheck(IsDucklakeForeignTable);
-  pgduckdb::RegisterDuckdbRelationNameCallback(GetDucklakeForeignTableName);
+  // libpgddb's deparser uses this hook to override the qualified
+  // "<catalog>.<schema>.<rel>" string for foreign tables backed by
+  // ducklake_fdw. Each FDW server is ATTACHed in DuckDB as fdw_db_*;
+  // the hook returns the fully-quoted alias.
+  pgddb_relation_name_hook = GetDucklakeForeignTableName;
 
   prev_fdw_process_utility_hook = ProcessUtility_hook ? ProcessUtility_hook : standard_ProcessUtility;
   ProcessUtility_hook = DucklakeFdwUtilityHook;

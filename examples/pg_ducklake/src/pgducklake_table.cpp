@@ -20,7 +20,7 @@
 #include <duckdb/common/error_data.hpp> /* must precede postgres.h (FATAL macro) */
 
 #include "pgducklake/utility/cpp_wrapper.hpp"
-#include "pgduckdb/pgduckdb_contracts.hpp"
+#include "pgddb/pgddb_table_am.hpp"
 
 #include <string>
 #include <vector>
@@ -54,7 +54,7 @@ extern "C" {
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 }
 
 /* ================================================================
@@ -140,12 +140,16 @@ static void duckdb_scan_rescan(TableScanDesc /*sscan*/, ScanKey /*key*/, bool /*
 }
 
 static bool duckdb_scan_getnextslot(TableScanDesc /*sscan*/, ScanDirection /*direction*/, TupleTableSlot *slot) {
-  /* If we are executing ALTER TABLE we return empty tuple */
-  if (pgduckdb::DuckdbIsAlterTableInProgress()) {
-    ExecClearTuple(slot);
-    return false;
-  }
-  NOT_IMPLEMENTED();
+  // Real user-issued SELECTs on a ducklake table are intercepted by the
+  // planner hook and never reach the AM-level scan. The only code paths
+  // that do reach here are PG-internal scans -- ALTER TABLE rewrite,
+  // ANALYZE, CLUSTER, REINDEX, etc. -- all of which can safely treat the
+  // table as empty: the row data lives in DuckLake, not in PG heap, and
+  // type/metadata changes are synchronized via the DDL event triggers.
+  // Returning false signals "end of scan" and lets ALTER TABLE complete
+  // without trying to copy nonexistent heap pages.
+  ExecClearTuple(slot);
+  return false;
 }
 
 /* ------------------------------------------------------------------------
@@ -338,10 +342,11 @@ static double duckdb_index_build_range_scan(Relation /*tableRelation*/, Relation
                                             bool /*progress*/, BlockNumber /*start_blockno*/, BlockNumber /*numblocks*/,
                                             IndexBuildCallback /*callback*/, void * /*callback_state*/,
                                             TableScanDesc /*scan*/) {
-  if (pgduckdb::DuckdbIsAlterTableInProgress()) {
-    return 0;
-  }
-  NOT_IMPLEMENTED();
+  // Same reasoning as duckdb_scan_getnextslot: PG-internal index-build
+  // scans treat the ducklake table as empty. CREATE INDEX on a
+  // ducklake-AM table is a no-op at the PG side; ducklake_sorted index
+  // metadata is built via the DDL trigger.
+  return 0;
 }
 
 static void duckdb_index_validate_scan(Relation /*tableRelation*/, Relation /*indexRelation*/,
@@ -497,7 +502,6 @@ static const TableAmRoutine ducklake_methods = {.type = T_TableAmRoutine,
                                                 .scan_sample_next_tuple = duckdb_scan_sample_next_tuple};
 
 Datum ducklake_am_handler(FunctionCallInfo /*funcinfo*/) {
-  RegisterDuckdbTableAm("pgducklake", &ducklake_methods);
   PG_RETURN_POINTER(&ducklake_methods);
 }
 
@@ -597,7 +601,7 @@ DECLARE_PG_FUNCTION(ducklake_create_table_trigger) {
   pgducklake::SyncDefaultTablePathToDuckDB();
 
   // Generate CREATE TABLE DDL for DuckDB
-  std::string create_table_ddl(pgduckdb_get_tabledef(relid));
+  std::string create_table_ddl(pgddb_get_tabledef(relid));
   elog(DEBUG1, "Creating DuckLake table: %s", create_table_ddl.c_str());
 
   // Execute CREATE TABLE in DuckDB via raw_query
@@ -612,8 +616,8 @@ DECLARE_PG_FUNCTION(ducklake_create_table_trigger) {
   if (IsA(parsetree, CreateTableAsStmt) && !pgducklake::ctas_skip_data) {
     auto ctas_stmt = castNode(CreateTableAsStmt, parsetree);
     auto ctas_query = (Query *)ctas_stmt->query;
-    const char *ctas_query_string = pgduckdb_get_querydef(ctas_query);
-    std::string insert_string = std::string("INSERT INTO ") + pgduckdb_relation_name(relid) + " " + ctas_query_string;
+    const char *ctas_query_string = pgddb_get_querydef(ctas_query);
+    std::string insert_string = std::string("INSERT INTO ") + pgddb_relation_name(relid) + " " + ctas_query_string;
 
     elog(DEBUG1, "CTAS data population: %s", insert_string.c_str());
 
@@ -833,9 +837,9 @@ DECLARE_PG_FUNCTION(ducklake_alter_table_trigger) {
   /* Generate DDL using pg_duckdb's ruleutils functions */
   char *ddl_str;
   if (IsA(parsetree, RenameStmt)) {
-    ddl_str = pgduckdb_get_rename_relationdef(relid, (RenameStmt *)parsetree);
+    ddl_str = pgddb_get_rename_relationdef(relid, (RenameStmt *)parsetree);
   } else if (IsA(parsetree, AlterTableStmt)) {
-    ddl_str = pgduckdb_get_alter_tabledef(relid, (AlterTableStmt *)parsetree);
+    ddl_str = pgddb_get_alter_tabledef(relid, (AlterTableStmt *)parsetree);
   } else {
     elog(ERROR, "Unexpected parsetree type in ALTER TABLE trigger: %d", nodeTag(parsetree));
   }
@@ -912,7 +916,7 @@ DECLARE_PG_FUNCTION(ducklake_comment_trigger) {
 
   /* Build DuckDB COMMENT SQL */
   std::string comment_ddl;
-  std::string rel_name(pgduckdb_relation_name(relid));
+  std::string rel_name(pgddb_relation_name(relid));
 
   if (objsubid > 0) {
     char *col_name = get_attname(relid, (AttrNumber)objsubid, false);
@@ -1205,6 +1209,14 @@ void SyncDroppedTables(const char *sid) {
     if (ret != SPI_OK_UTILITY)
       elog(ERROR, "SPI_exec DROP TABLE failed: %s", SPI_result_code_string(ret));
   }
+}
+
+static const char *DucklakeTableAmHook(const TableAmRoutine *am) {
+  return am == &ducklake_methods ? PGDUCKLAKE_TABLE_AM : nullptr;
+}
+
+void InitTableAmHook() {
+  pgddb::table_am_get_name_hook = DucklakeTableAmHook;
 }
 
 } // namespace pgducklake

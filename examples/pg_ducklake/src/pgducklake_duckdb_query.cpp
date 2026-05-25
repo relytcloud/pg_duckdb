@@ -1,91 +1,62 @@
 /*
- * pgducklake_duckdb_query.cpp -- Execute DuckDB queries via pg_duckdb.
+ * pgducklake_duckdb_query.cpp -- Execute DuckDB queries against libpgddb.
  *
- * @scope backend: cached raw_query OID, last_error thread_local
+ * @scope backend: last_error thread_local
  *
- * Wraps pg_duckdb's duckdb.raw_query() UDF so pg_ducklake code can
- * execute DuckDB SQL with error capture.  Used by DDL triggers,
- * VACUUM, freeze, FDW attach, and the utility hook.
+ * Drives DuckDB queries directly through libpgddb's DuckDBManager
+ * connection. The upstream design routed every query through
+ * pg_duckdb's duckdb.raw_query() UDF (PG SPI -> pg_duckdb's planner ->
+ * DuckDB) so pg_ducklake could stay PG-only; the libpgddb consumer
+ * model gives us the connection in process, so we use it directly.
+ *
+ * Used by DDL triggers, VACUUM, freeze, FDW attach, and the utility
+ * hook.
  */
 
 #include <duckdb/common/string_util.hpp>
+#include <duckdb/main/connection.hpp>
 #include <duckdb/parser/keyword_helper.hpp>
 
 #include "pgducklake/pgducklake_duckdb_query.hpp"
 #include "pgducklake/pgducklake_guc.hpp"
+
+#include "pgddb/pgddb_duckdb.hpp"
 
 #include <string>
 
 extern "C" {
 #include "postgres.h"
 
-#include "catalog/namespace.h"
-#include "fmgr.h"
-#include "parser/parse_func.h"
-#include "utils/builtins.h"
-#include "utils/guc.h"
+#include "utils/elog.h"
 }
 
 namespace pgducklake {
 
-static Oid GetRawQueryFuncOid() {
-  static Oid cached = InvalidOid;
-  if (!OidIsValid(cached)) {
-    List *funcname = list_make2(makeString(pstrdup("duckdb")), makeString(pstrdup("raw_query")));
-    Oid argtypes[] = {TEXTOID};
-    cached = LookupFuncName(funcname, 1, argtypes, false);
-    list_free(funcname);
-  }
-  return cached;
-}
-
-static void DuckdbRawQuery(const char *query) {
-  OidFunctionCall1(GetRawQueryFuncOid(), CStringGetTextDatum(query));
-}
-
 /*
- * Execute a DuckDB query via pg_duckdb's duckdb.raw_query() UDF.
- * Ensures the DuckLake catalog is attached first.
+ * Execute a DuckDB query on libpgddb's cached connection.
  *
  * Returns 0 on success, 1 on error.
- * On error, sets *errmsg_out to the error message (if non-null).
+ * On error, sets *errmsg_out to a thread-local copy of the message.
  */
 int ExecuteDuckDBQuery(const char *query, const char **errmsg_out) {
   static thread_local std::string last_error;
 
-  // Volatile to survive PG_CATCH longjmp
-  volatile int result = 0;
-  MemoryContext saved_context = CurrentMemoryContext;
-
-  // Suppress NOTICE messages from duckdb.raw_query() which unconditionally
-  // emits "result: ..." via elog(NOTICE).
-  //
-  // FIXME: should we modify pg_duckdb?
-  auto save_nestlevel = NewGUCNestLevel();
-  SetConfigOption("client_min_messages", "warning", PGC_USERSET, PGC_S_SESSION);
-
-  PG_TRY();
-  {
-    DuckdbRawQuery(query);
-  }
-  PG_CATCH();
-  {
-    MemoryContextSwitchTo(saved_context);
-    ErrorData *edata = CopyErrorData();
-    FlushErrorState();
-
-    last_error = edata->message ? edata->message : "unknown error";
-    FreeErrorData(edata);
-
+  try {
+    auto *conn = ::pgddb::DuckDBManager::GetConnection();
+    auto result = conn->Query(query);
+    if (result->HasError()) {
+      last_error = result->GetError();
+      if (errmsg_out)
+        *errmsg_out = last_error.c_str();
+      return 1;
+    }
+    return 0;
+  } catch (const std::exception &e) {
+    last_error = e.what();
     if (errmsg_out)
       *errmsg_out = last_error.c_str();
-    result = 1;
+    return 1;
   }
-  PG_END_TRY();
-
-  AtEOXact_GUC(false, save_nestlevel);
-
-  return result;
 }
 
 void SyncDefaultTablePathToDuckDB() {

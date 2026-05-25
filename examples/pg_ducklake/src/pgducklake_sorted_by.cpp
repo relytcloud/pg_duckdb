@@ -27,7 +27,6 @@
 
 #include "pgducklake/pgducklake_sorted_by.hpp"
 #include "pgducklake/utility/cpp_wrapper.hpp"
-#include "pgduckdb/pgduckdb_contracts.hpp"
 
 #include <string>
 
@@ -55,7 +54,7 @@ extern "C" {
 #include "utils/array.h"
 #include "utils/syscache.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 
 /* ================================================================
  * Index AM routines
@@ -204,7 +203,7 @@ DECLARE_PG_FUNCTION(ducklake_set_sort) {
     spec += text_to_cstring(DatumGetTextPP(elems[i]));
   }
 
-  std::string query = std::string("ALTER TABLE ") + pgduckdb_relation_name(relid) + " SET SORTED BY (" + spec + ")";
+  std::string query = std::string("ALTER TABLE ") + pgddb_relation_name(relid) + " SET SORTED BY (" + spec + ")";
 
   pgducklake::sort_synced_from_pg = true;
   const char *error_msg = nullptr;
@@ -231,7 +230,7 @@ DECLARE_PG_FUNCTION(ducklake_reset_sort) {
   Oid relid = PG_GETARG_OID(0);
   EnsureDuckLakeTable(relid);
 
-  std::string query = std::string("ALTER TABLE ") + pgduckdb_relation_name(relid) + " RESET SORTED BY";
+  std::string query = std::string("ALTER TABLE ") + pgddb_relation_name(relid) + " RESET SORTED BY";
 
   pgducklake::sort_synced_from_pg = true;
   const char *error_msg = nullptr;
@@ -443,16 +442,11 @@ void HandleCreateSortedIndex(PlannedStmt *pstmt, const char *query_string, bool 
     return;
 
   std::string query =
-      std::string("ALTER TABLE ") + pgduckdb_relation_name(relid) + " SET SORTED BY (" + sort_spec + ")";
+      std::string("ALTER TABLE ") + pgddb_relation_name(relid) + " SET SORTED BY (" + sort_spec + ")";
 
   elog(DEBUG1, "ducklake_sorted: %s", query.c_str());
 
   PushActiveSnapshot(GetTransactionSnapshot());
-  if (!pgduckdb::DuckdbEnsureCacheValid()) {
-    PopActiveSnapshot();
-    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("pg_duckdb is not available")));
-  }
-
   const char *error_msg = nullptr;
   int result = ExecuteDuckDBQuery(query.c_str(), &error_msg);
   PopActiveSnapshot();
@@ -566,13 +560,9 @@ void HandleDropSortedIndex(const std::vector<SortedIndexDrop> &drops) {
     return;
 
   PushActiveSnapshot(GetTransactionSnapshot());
-  if (!pgduckdb::DuckdbEnsureCacheValid()) {
-    PopActiveSnapshot();
-    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("pg_duckdb is not available")));
-  }
 
   for (auto &drop : drops) {
-    std::string query = std::string("ALTER TABLE ") + pgduckdb_relation_name(drop.table_oid) + " RESET SORTED BY";
+    std::string query = std::string("ALTER TABLE ") + pgddb_relation_name(drop.table_oid) + " RESET SORTED BY";
     elog(DEBUG1, "ducklake_sorted drop: %s", query.c_str());
 
     const char *error_msg = nullptr;

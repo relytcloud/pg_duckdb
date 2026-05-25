@@ -14,7 +14,7 @@ INSERT INTO dtp_test VALUES (1, 'one'), (2, 'two');
 SELECT * FROM dtp_test ORDER BY id;
 
 -- Verify files are under the custom path
-SELECT * FROM duckdb.query($$
+SELECT * FROM ducklake.duckdb_query($$
   SELECT bool_and(starts_with(data_file, '/tmp/ducklake_test_custom_path/')) AS path_ok
   FROM ducklake_list_files('pgducklake', 'dtp_test', schema => 'public')
 $$);

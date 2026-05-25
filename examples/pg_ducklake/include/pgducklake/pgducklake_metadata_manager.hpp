@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pgduckdb/pg/declarations.hpp"
+#include "pgddb/pg/declarations.hpp"
 
 #include <common/ducklake_encryption.hpp>
 #include <common/ducklake_options.hpp>

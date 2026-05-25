@@ -1,94 +1,74 @@
-.PHONY: FORCE clean-all \
-	check-isolation clean-isolation \
-	ducklake clean-ducklake \
-	pg_duckdb install-pg_duckdb clean-pg_duckdb \
-	bench-direct-insert bench-concurrent-direct-insert \
-	format check-format
+# pg_ducklake as a libpgddb consumer.
+#
+# Build wiring follows examples/pg_vortex/Makefile: include the root Makefile
+# to pull in PGDDB_INCLUDE / PGDDB_OBJS / FULL_DUCKDB_LIB, then bundle the
+# libpgddb sources into pg_ducklake.so. The ducklake DuckDB extension is
+# baked into libduckdb_bundle.a via DUCKDB_EXTENSION_CONFIGS, so no separate
+# cmake invocation or -force_load is needed.
+
+# EXTENSION_CONFIGS must be set before including the root Makefile because
+# DUCKDB_CONSUMER_TAG hashes it.
+ROOT_DIR := $(abspath $(CURDIR)/../..)
+EXTENSION_CONFIGS := $(CURDIR)/pg_ducklake_extensions.cmake
+include $(ROOT_DIR)/Makefile
 
 MODULE_big = pg_ducklake
 EXTENSION = pg_ducklake
 DATA = pg_ducklake.control $(wildcard sql/pg_ducklake--*.sql)
 
 SRCS = $(wildcard src/*.cpp src/*/*.cpp)
-OBJS = $(subst .cpp,.o, $(SRCS))
-
+OBJS = $(SRCS:.cpp=.o)
 C_SRCS = $(wildcard src/*.c src/*/*.c)
-OBJS += $(subst .c,.o, $(C_SRCS))
+OBJS += $(C_SRCS:.c=.o)
 
-# ---------------------------------------------------------------------------
-# Path configuration
-# ---------------------------------------------------------------------------
-PG_DUCKDB_DIR = $(CURDIR)/third_party/pg_duckdb
-DUCKDB_SRC_DIR = $(PG_DUCKDB_DIR)/third_party/duckdb
-DUCKLAKE_DIR = $(CURDIR)/third_party/ducklake
+# libpgddb objects compiled in-place at $(ROOT_DIR)/src/.
+OBJS += $(PGDDB_OBJS)
 
-DUCKDB_BUILD_TYPE ?= release
-DUCKLAKE_BUILD_DIR = $(DUCKLAKE_DIR)/build/$(DUCKDB_BUILD_TYPE)
-DUCKLAKE_STATIC_LIB = $(DUCKLAKE_BUILD_DIR)/extension/ducklake/libducklake_extension.a
+DUCKLAKE_INCLUDE = -I$(CURDIR)/third_party/ducklake/src/include
 
-# ---------------------------------------------------------------------------
-# Include paths
-# ---------------------------------------------------------------------------
+override PG_CPPFLAGS += -Iinclude $(PGDDB_INCLUDE) $(PGDDB_DUCKDB_INCLUDE) $(DUCKLAKE_INCLUDE) -isystem $(INCLUDEDIR_SERVER)
+override PG_CXXFLAGS += -std=c++17 -Wno-register
 
-# DuckDB + ducklake headers (for the DuckDB-facing bridge TU only)
-DUCKDB_INCLUDES = \
-	-isystem $(DUCKDB_SRC_DIR)/src/include \
-	-isystem $(DUCKDB_SRC_DIR)/third_party/re2 \
-	-I$(DUCKLAKE_DIR)/src/include
+# pg_ducklake's source directly references DuckLakeMetadataManager /
+# PostgresMetadataManager symbols from the ducklake DuckDB extension. The
+# bundle (libduckdb_bundle.a) contains them, but the linker won't pull them
+# in just because pg_ducklake.cpp inherits from those classes -- vtable
+# references don't drive archive member inclusion. Force-load the
+# pre-bundle libducklake_extension.a explicitly to keep all its .o's.
+DUCKLAKE_EXT_LIB := $(DUCKDB_BUILD_DIR)/extension/ducklake/libducklake_extension.a
 
-# Project-local headers (bridge header)
-LOCAL_INCLUDES = -I$(CURDIR)/include
-
-# ---------------------------------------------------------------------------
-# Compiler flags
-# ---------------------------------------------------------------------------
-
-# PG-facing TU: standard PGXS flags + bridge header path
-override PG_CPPFLAGS += $(LOCAL_INCLUDES) $(DUCKDB_INCLUDES)
-override PG_CXXFLAGS += -std=c++17 -Wno-register -Weffc++
-
-# DuckDB-facing TU: no PG headers allowed
-DUCKDB_CXXFLAGS = -std=c++17 -fPIC
-
-# ---------------------------------------------------------------------------
-# Linker flags
-# ---------------------------------------------------------------------------
-
-# Force-load the ducklake static library so all symbols are available to
-# DuckDB's LoadStaticExtension<DucklakeExtension>() registration.
-# Without this, the linker would drop .o files not directly referenced.
-ifeq ($(shell uname -s), Darwin)
-	SHLIB_LINK += -Wl,-force_load,$(DUCKLAKE_STATIC_LIB)
+PG_DUCKLAKE_LINK_FLAGS = $(FULL_DUCKDB_LIB) -lstdc++ -llz4
+ifeq ($(shell uname -s),Darwin)
+	PG_DUCKLAKE_LINK_FLAGS += -Wl,-force_load,$(DUCKLAKE_EXT_LIB)
 else
-	SHLIB_LINK += -Wl,--whole-archive $(DUCKLAKE_STATIC_LIB) -Wl,--no-whole-archive
-	SHLIB_LINK += -Wl,--exclude-libs,$(notdir $(DUCKLAKE_STATIC_LIB))
+	PG_DUCKLAKE_LINK_FLAGS += -Wl,--whole-archive $(DUCKLAKE_EXT_LIB) -Wl,--no-whole-archive
+	PG_DUCKLAKE_LINK_FLAGS += -Wl,--exclude-libs,ALL
 endif
 
-# Link against libduckdb from PG_LIB (installed by pg_duckdb)
-SHLIB_LINK += -Wl,-rpath,$(PG_LIB)/ -L$(PG_LIB) -lduckdb -lstdc++
+SHLIB_LINK += $(PG_DUCKLAKE_LINK_FLAGS)
 
-# Allow pg_duckdb symbols to resolve at load time
-ifeq ($(shell uname -s), Darwin)
-	SHLIB_LINK += -Wl,-undefined,dynamic_lookup
-endif
+PG_CONFIG ?= pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+INCLUDEDIR_SERVER := $(shell $(PG_CONFIG) --includedir-server)
+include $(PGXS)
 
-# ---------------------------------------------------------------------------
-# PGXS (must come before any target rules so PGXS's "all" is the default)
-# ---------------------------------------------------------------------------
-include Makefile.global
+# Consumer .o files depend on the duckdb submodule HEAD marker so first-time
+# builds init the submodule before compiling.
+$(OBJS): $(PGDDB_DIR)/.git/modules/third_party/duckdb/HEAD
 
-# ---------------------------------------------------------------------------
-# Code formatting (project files only, not third_party/)
-# ---------------------------------------------------------------------------
+# shlib pulls in $(FULL_DUCKDB_LIB) before linking.
+$(shlib): $(FULL_DUCKDB_LIB) $(OBJS)
+
+# Project formatting (project files only, not third_party/).
 FORMAT_FILES = $(shell find src/ include/ -name '*.cpp' -o -name '*.hpp' -o -name '*.h')
+
+.PHONY: format check-format check-regression clean-regression check-isolation clean-isolation clean-all
 
 format:
 	clang-format -i $(FORMAT_FILES)
 
 check-format:
 	clang-format --dry-run -Werror $(FORMAT_FILES)
-
-# install-pg_duckdb is pulled in via $(shlib) dependency
 
 installcheck: all install
 	$(MAKE) check-regression check-isolation
@@ -105,71 +85,4 @@ check-isolation:
 clean-isolation:
 	$(MAKE) -C test/isolation clean-isolation
 
-bench-direct-insert: all install
-	bash test/benchmark/bench_direct_insert.sh
-
-bench-concurrent-direct-insert: all install
-	bash test/benchmark/bench_concurrent_direct_insert.sh
-
-# ---------------------------------------------------------------------------
-# Submodule (duckdb)
-# ---------------------------------------------------------------------------
-DUCKDB_HEAD = .git/modules/third_party/pg_duckdb/third_party/duckdb/HEAD
-
-$(DUCKDB_HEAD):
-	git submodule update --init --depth=1 third_party/pg_duckdb/third_party/duckdb
-
-# ---------------------------------------------------------------------------
-# pg_duckdb
-# ---------------------------------------------------------------------------
-PG_DUCKDB_TARGET = $(PG_DUCKDB_DIR)/pg_duckdb$(DLSUFFIX)
-
-pg_duckdb: $(PG_DUCKDB_TARGET)
-
-# pg_duckdb is a subtree -- always delegate to its own make which
-# tracks source dependencies via PGXS/cmake.
-$(PG_DUCKDB_TARGET): $(DUCKDB_HEAD) FORCE
-	DUCKDB_BUILD_TYPE=$(DUCKDB_BUILD_TYPE) \
-	$(MAKE) -C $(PG_DUCKDB_DIR)
-
-install-pg_duckdb: pg_duckdb
-	$(MAKE) -C $(PG_DUCKDB_DIR) install
-
-clean-pg_duckdb:
-	$(MAKE) -C $(PG_DUCKDB_DIR) clean-all
-
-# ---------------------------------------------------------------------------
-# Build ducklake using its own cmake-based build system
-# ---------------------------------------------------------------------------
-ducklake: $(DUCKLAKE_STATIC_LIB)
-
-# ducklake is a subtree -- always delegate to its own cmake build
-# which tracks source dependencies internally.
-$(DUCKLAKE_STATIC_LIB): $(DUCKDB_HEAD) FORCE
-	DUCKDB_SRCDIR=$(DUCKDB_SRC_DIR) \
-	CMAKE_VARS="-DBUILD_SHELL=0 -DBUILD_PYTHON=0 -DBUILD_UNITTESTS=0" \
-	DISABLE_SANITIZER=1 \
-	$(MAKE) -C $(DUCKLAKE_DIR) $(DUCKDB_BUILD_TYPE)
-
-clean-ducklake:
-	rm -rf $(DUCKLAKE_DIR)/build
-
-# ---------------------------------------------------------------------------
-# Compilation rules
-# ---------------------------------------------------------------------------
-
-# DuckDB bridge TU: compiled with DuckDB+ducklake headers, NOT PG headers.
-
-# PG-facing TU uses the default PGXS pattern rule (includes PG server headers).
-# Our PG_CPPFLAGS += $(LOCAL_INCLUDES) adds the bridge header path.
-
-$(OBJS): $(DUCKDB_HEAD)
-
-COMPILE.cc.bc += $(PG_CPPFLAGS)
-COMPILE.cxx.bc += $(PG_CXXFLAGS)
-
-# Shared library depends on ducklake static lib; libduckdb (from pg_duckdb)
-# must be installed before linking but should not force relinking.
-$(shlib): $(DUCKLAKE_STATIC_LIB) | install-pg_duckdb
-
-clean-all: clean clean-regression clean-isolation clean-pg_duckdb clean-ducklake
+clean-all: clean clean-regression clean-isolation clean-duckdb

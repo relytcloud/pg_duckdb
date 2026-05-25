@@ -12,13 +12,13 @@ SELECT * FROM freeze_test ORDER BY id;
 CALL ducklake.freeze('/tmp/test_freeze.ducklake');
 
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ ATTACH 'ducklake:/tmp/test_freeze.ducklake' AS __frozen__ $$);
+SELECT ducklake.duckdb_raw_query($$ ATTACH 'ducklake:/tmp/test_freeze.ducklake' AS __frozen__ $$);
 RESET client_min_messages;
 
-SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_test ORDER BY id $$);
+SELECT * FROM ducklake.duckdb_query($$ SELECT * FROM __frozen__.public.freeze_test ORDER BY id $$);
 
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ DETACH __frozen__ $$);
+SELECT ducklake.duckdb_raw_query($$ DETACH __frozen__ $$);
 RESET client_min_messages;
 
 -- Test 2: Freeze with inlined data -- flush must be called separately
@@ -39,13 +39,13 @@ CALL ducklake.freeze('/tmp/test_freeze_inlined.ducklake');
 
 -- Attach as real DuckLake and query -- proves flush materialized the data
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ ATTACH 'ducklake:/tmp/test_freeze_inlined.ducklake' AS __frozen__ $$);
+SELECT ducklake.duckdb_raw_query($$ ATTACH 'ducklake:/tmp/test_freeze_inlined.ducklake' AS __frozen__ $$);
 RESET client_min_messages;
 
-SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_inlined ORDER BY a $$);
+SELECT * FROM ducklake.duckdb_query($$ SELECT * FROM __frozen__.public.freeze_inlined ORDER BY a $$);
 
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ DETACH __frozen__ $$);
+SELECT ducklake.duckdb_raw_query($$ DETACH __frozen__ $$);
 RESET client_min_messages;
 
 -- Test 3: Error -- NULL output_path

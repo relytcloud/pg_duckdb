@@ -17,7 +17,8 @@
 #include "pgducklake/pgducklake_guc.hpp"
 #include "pgducklake/pgducklake_hooks.hpp"
 #include "pgducklake/pgducklake_maintenance.hpp"
-#include "pgduckdb/pgduckdb_contracts.hpp"
+#include "pgducklake/pgducklake_types.hpp"
+#include "pgddb/pgddb_node.hpp"
 
 extern "C" {
 #include "postgres.h"
@@ -41,12 +42,6 @@ PG_MODULE_MAGIC;
 void _PG_init(void) {
   // Register metadata manager factory in DuckLake's process-global registry.
   duckdb::DuckLakeMetadataManager::Register(PGDUCKLAKE_DUCKDB_CATALOG, pgducklake::PgDuckLakeMetadataManager::Create);
-  // Register callback for deferred static extension loading
-  pgduckdb::RegisterDuckdbLoadExtension(ducklake_load_extension);
-  // Register pg_ducklake's DuckDB-only functions with pg_duckdb's metadata cache
-  pgducklake::RegisterDuckdbOnlyFunctions();
-  // Register ducklake.variant as a passthrough type (OID resolved lazily)
-  pgduckdb::RegisterPassthroughType(PGDUCKLAKE_PG_SCHEMA, "variant", "VARIANT");
   // Register DuckLake GUCs
   pgducklake::RegisterGUCs();
   // Register shared memory and background maintenance launcher
@@ -54,10 +49,21 @@ void _PG_init(void) {
   pgducklake::RegisterMaintenanceLauncher();
   // Register shared memory for direct-insert planner/exec counters
   pgducklake::InitDirectInsertStatsShmem();
-  // Register custom scan node methods
+  // Register libpgddb's CustomScan node (for DuckDB-routed plans) and
+  // pg_ducklake's own direct-insert CustomScan.
+  pgddb::InitNode();
   pgducklake::RegisterDirectInsertNode();
+  // Install the table-AM name hook so the lib deparser/planner can
+  // recognize ducklake_methods relations.
+  pgducklake::InitTableAmHook();
   // Install pg_ducklake planner/utility hooks.
   pgducklake::InitHooks();
+  // Install libpgddb ruleutils hooks (db_and_schema policy).
+  pgducklake::InitRuleutilsHooks();
+  // Install libpgddb type hooks (DuckDB STRUCT -> ducklake.duckdb_struct).
+  pgducklake::InitTypeHooks();
+  // Mirror PG transaction events to DuckDB's DuckLake transaction.
+  pgducklake::RegisterXactCallback();
   // Register FDW callbacks and hooks.
   pgducklake::InitFDW();
 }

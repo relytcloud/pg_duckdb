@@ -53,48 +53,57 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
-#include "pgduckdb/pgduckdb_contracts.hpp"
+extern "C" {
+#include "postgres.h"
+
+#include "fmgr.h"
+
+#include "catalog/namespace.h"
+#include "catalog/pg_proc.h"
+#include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/syscache.h"
+}
+
+#include <cstring>
 
 namespace pgducklake {
 
 using namespace duckdb;
 
-void RegisterDuckdbOnlyFunctions() {
-  pgduckdb::RegisterDuckdbOnlyExtension("pg_ducklake");
-  // Existing functions
-  pgduckdb::RegisterDuckdbOnlyFunction("options");
-  pgduckdb::RegisterDuckdbOnlyFunction("time_travel");
-  // Snapshot functions
-  pgduckdb::RegisterDuckdbOnlyFunction("snapshots");
-  pgduckdb::RegisterDuckdbOnlyFunction("current_snapshot");
-  pgduckdb::RegisterDuckdbOnlyFunction("last_committed_snapshot");
-  // Metadata functions
-  pgduckdb::RegisterDuckdbOnlyFunction("table_info");
-  pgduckdb::RegisterDuckdbOnlyFunction("list_files");
-  // Data change feed functions
-  pgduckdb::RegisterDuckdbOnlyFunction("table_insertions");
-  pgduckdb::RegisterDuckdbOnlyFunction("table_deletions");
-  pgduckdb::RegisterDuckdbOnlyFunction("table_changes");
-  // Maintenance functions
-  pgduckdb::RegisterDuckdbOnlyFunction("cleanup_old_files");
-  pgduckdb::RegisterDuckdbOnlyFunction("cleanup_orphaned_files");
-  pgduckdb::RegisterDuckdbOnlyFunction("flush_inlined_data");
-  pgduckdb::RegisterDuckdbOnlyFunction("ensure_inlined_data_table");
-  pgduckdb::RegisterDuckdbOnlyFunction("merge_adjacent_files");
-  pgduckdb::RegisterDuckdbOnlyFunction("rewrite_data_files");
-  pgduckdb::RegisterDuckdbOnlyFunction("expire_snapshots");
-  // Virtual column accessors
-  pgduckdb::RegisterDuckdbOnlyFunction("rowid");
-  pgduckdb::RegisterDuckdbOnlyFunction("snapshot_id");
-  pgduckdb::RegisterDuckdbOnlyFunction("filename");
-  pgduckdb::RegisterDuckdbOnlyFunction("file_row_number");
-  pgduckdb::RegisterDuckdbOnlyFunction("file_index");
-  // Variant field extraction
-  pgduckdb::RegisterDuckdbOnlyFunction("pg_variant_extract");
-  pgduckdb::RegisterDuckdbOnlyFunction("pg_variant_extract_json");
-  pgduckdb::RegisterDuckdbOnlyFunction("pg_variant_extract_json_idx");
-  pgduckdb::RegisterDuckdbOnlyFunction("pg_variant_extract_idx");
+bool
+IsDucklakeOnlyFunction(Oid funcid) {
+  // Match by prosrc only: pg_ducklake declares all of its DuckDB-routed
+  // SQL stubs with prosrc='duckdb_only_function', whether they live in
+  // the ducklake schema (snapshots, table_info, ...) or in @extschema@
+  // (read_csv, read_parquet -- unqualified for parity with pg_duckdb).
+  HeapTuple tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+  if (!HeapTupleIsValid(tp))
+    return false;
+  bool isnull;
+  Datum prosrc_datum = SysCacheGetAttr(PROCOID, tp, Anum_pg_proc_prosrc, &isnull);
+  if (isnull) {
+    ReleaseSysCache(tp);
+    return false;
+  }
+  char *prosrc_str = TextDatumGetCString(prosrc_datum);
+  ReleaseSysCache(tp);
+  return std::strcmp(prosrc_str, "duckdb_only_function") == 0;
 }
+
+} // namespace pgducklake
+
+// duckdb_only_function: marker stub for ducklake.* functions declared with
+// `AS 'MODULE_PATHNAME', 'duckdb_only_function'`. The planner hook routes
+// these calls to DuckDB before fmgr would call the body; the body itself
+// lives in libpgddb. Just attach the V1 metadata.
+extern "C" {
+#include "pgddb/pgddb_subscript.h"
+
+PG_FUNCTION_INFO_V1(duckdb_only_function);
+}
+
+namespace pgducklake {
 
 /*
  * Register wrapper table macros in DuckDB's system.main catalog.

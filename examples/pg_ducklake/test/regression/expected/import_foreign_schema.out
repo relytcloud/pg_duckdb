@@ -44,11 +44,11 @@ FDW options: (schema_name 'public', table_name 'ifs_orders')
 Server: ifs_server
 FDW options: (schema_name 'public', table_name 'ifs_products')
 
-                  Foreign table "ifs_target.ifs_variant"
- Column |       Type       | Collation | Nullable | Default | FDW options 
---------+------------------+-----------+----------+---------+-------------
- id     | integer          |           |          |         | 
- v      | ducklake.variant |           |          |         | 
+             Foreign table "ifs_target.ifs_variant"
+ Column |  Type   | Collation | Nullable | Default | FDW options 
+--------+---------+-----------+----------+---------+-------------
+ id     | integer |           |          |         | 
+ v      | text    |           |          |         | 
 Server: ifs_server
 FDW options: (schema_name 'public', table_name 'ifs_variant')
 

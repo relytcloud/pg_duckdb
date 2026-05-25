@@ -20,7 +20,6 @@ check-regression: dataset
 	--no-locale \
 	--temp-instance=./tmp_check \
 	--temp-config regression.conf \
-	--load-extension=pg_duckdb \
 	--load-extension=pg_ducklake \
 	$(if $(TEST),$(TEST),--schedule=schedule)
 

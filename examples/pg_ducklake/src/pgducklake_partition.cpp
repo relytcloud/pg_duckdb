@@ -23,7 +23,7 @@ extern "C" {
 #include "utils/builtins.h"
 #include "utils/elog.h"
 
-#include "pgduckdb/pgduckdb_ruleutils.h"
+#include "pgddb/pgddb_ruleutils.h"
 }
 
 extern "C" {
@@ -59,7 +59,7 @@ DECLARE_PG_FUNCTION(ducklake_set_partition) {
   }
 
   std::string query =
-      std::string("ALTER TABLE ") + pgduckdb_relation_name(relid) + " SET PARTITIONED BY (" + spec + ")";
+      std::string("ALTER TABLE ") + pgddb_relation_name(relid) + " SET PARTITIONED BY (" + spec + ")";
 
   const char *error_msg = nullptr;
   int result = pgducklake::ExecuteDuckDBQuery(query.c_str(), &error_msg);
@@ -77,7 +77,7 @@ DECLARE_PG_FUNCTION(ducklake_reset_partition) {
   Oid relid = PG_GETARG_OID(0);
   EnsureDuckLakeTable(relid);
 
-  std::string query = std::string("ALTER TABLE ") + pgduckdb_relation_name(relid) + " RESET PARTITIONED BY";
+  std::string query = std::string("ALTER TABLE ") + pgddb_relation_name(relid) + " RESET PARTITIONED BY";
 
   const char *error_msg = nullptr;
   int result = pgducklake::ExecuteDuckDBQuery(query.c_str(), &error_msg);

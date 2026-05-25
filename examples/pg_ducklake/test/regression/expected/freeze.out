@@ -14,14 +14,14 @@ SELECT * FROM freeze_test ORDER BY id;
 -- Test 1: Basic freeze - attach as a real DuckLake and query
 CALL ducklake.freeze('/tmp/test_freeze.ducklake');
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ ATTACH 'ducklake:/tmp/test_freeze.ducklake' AS __frozen__ $$);
- raw_query 
------------
+SELECT ducklake.duckdb_raw_query($$ ATTACH 'ducklake:/tmp/test_freeze.ducklake' AS __frozen__ $$);
+ duckdb_raw_query 
+------------------
  
 (1 row)
 
 RESET client_min_messages;
-SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_test ORDER BY id $$);
+SELECT * FROM ducklake.duckdb_query($$ SELECT * FROM __frozen__.public.freeze_test ORDER BY id $$);
  id | name  
 ----+-------
   1 | Alice
@@ -29,9 +29,9 @@ SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_test ORDER 
 (2 rows)
 
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ DETACH __frozen__ $$);
- raw_query 
------------
+SELECT ducklake.duckdb_raw_query($$ DETACH __frozen__ $$);
+ duckdb_raw_query 
+------------------
  
 (1 row)
 
@@ -68,14 +68,14 @@ SELECT * FROM ducklake.flush_inlined_data();
 CALL ducklake.freeze('/tmp/test_freeze_inlined.ducklake');
 -- Attach as real DuckLake and query -- proves flush materialized the data
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ ATTACH 'ducklake:/tmp/test_freeze_inlined.ducklake' AS __frozen__ $$);
- raw_query 
------------
+SELECT ducklake.duckdb_raw_query($$ ATTACH 'ducklake:/tmp/test_freeze_inlined.ducklake' AS __frozen__ $$);
+ duckdb_raw_query 
+------------------
  
 (1 row)
 
 RESET client_min_messages;
-SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_inlined ORDER BY a $$);
+SELECT * FROM ducklake.duckdb_query($$ SELECT * FROM __frozen__.public.freeze_inlined ORDER BY a $$);
  a 
 ---
  1
@@ -84,9 +84,9 @@ SELECT * FROM duckdb.query($$ SELECT * FROM __frozen__.public.freeze_inlined ORD
 (3 rows)
 
 SET client_min_messages = warning;
-SELECT duckdb.raw_query($$ DETACH __frozen__ $$);
- raw_query 
------------
+SELECT ducklake.duckdb_raw_query($$ DETACH __frozen__ $$);
+ duckdb_raw_query 
+------------------
  
 (1 row)
 

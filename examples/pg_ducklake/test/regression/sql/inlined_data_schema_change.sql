@@ -27,7 +27,7 @@ SELECT * FROM dl_schema_change ORDER BY id;
 
 -- Force a fresh DuckDB instance that loads the catalog from scratch.
 -- Before the fix, column x for id=3 and columns x,y for id=4 returned NULL.
-CALL duckdb.recycle_ddb();
+CALL ducklake.recycle_ddb();
 
 SELECT id, score, x, y FROM dl_schema_change WHERE id = 3;
 SELECT id, score, x, y FROM dl_schema_change WHERE id = 4;
@@ -37,7 +37,7 @@ SELECT * FROM dl_schema_change ORDER BY id;
 ALTER TABLE dl_schema_change DROP COLUMN x;
 INSERT INTO dl_schema_change (id, score, y) VALUES (5, 500, 20);
 
-CALL duckdb.recycle_ddb();
+CALL ducklake.recycle_ddb();
 
 SELECT id, score, y FROM dl_schema_change WHERE id = 4;
 SELECT id, score, y FROM dl_schema_change WHERE id = 5;

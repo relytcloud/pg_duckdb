@@ -50,8 +50,8 @@ extern "C" {
 }
 
 // Include after PostgreSQL headers (since these also include postgres.h)
+#include "pgddb/pgddb_process_lock.hpp"
 #include "pgducklake/utility/cpp_wrapper.hpp"
-#include "pgducklake/utility/unsafe_command_id_guard.hpp"
 #include <cstring>
 
 namespace pgducklake {
@@ -132,51 +132,28 @@ static void InsertSPITupleTableIntoChunk(duckdb::DataChunk &output, SPITupleTabl
 }
 
 /*
- * RAII guard for pg_duckdb's GlobalProcessLock.  DuckLake metadata reads run
+ * RAII guard for libpgddb's GlobalProcessLock. DuckLake metadata reads run
  * on a DuckDB worker thread that shares the PG backend with other DuckDB
- * threads.  We must hold this lock while calling any PG API (SPI, snapshots,
+ * threads. We must hold this lock while calling any PG API (SPI, snapshots,
  * etc.) to prevent concurrent access from other DuckDB threads.
  */
 class GlobalProcessLockGuard {
 public:
   GlobalProcessLockGuard() {
-    pgduckdb::DuckdbLockGlobalProcess();
+    ::pgddb::GlobalProcessLock::GetLock().lock();
   }
   ~GlobalProcessLockGuard() {
-    pgduckdb::DuckdbUnlockGlobalProcess();
+    ::pgddb::GlobalProcessLock::GetLock().unlock();
   }
   GlobalProcessLockGuard(const GlobalProcessLockGuard &) = delete;
   GlobalProcessLockGuard &operator=(const GlobalProcessLockGuard &) = delete;
 };
 
-/*
- * RAII guard that temporarily disables duckdb.force_execution.  SPI queries
- * from the metadata manager must be planned by PostgreSQL, not re-routed
- * through DuckDB's planner hook -- otherwise we deadlock on the ClientContext
- * mutex that the caller already holds.  We toggle the backing bool directly
- * to avoid SetConfigOption interactions with subtransaction GUC handling.
- */
-class ForceExecutionGuard {
-public:
-  ForceExecutionGuard() : saved_(pgduckdb::DuckdbSetForceExecution(false)) {
-  }
-  ~ForceExecutionGuard() {
-    pgduckdb::DuckdbSetForceExecution(saved_);
-  }
-  ForceExecutionGuard(const ForceExecutionGuard &) = delete;
-  ForceExecutionGuard &operator=(const ForceExecutionGuard &) = delete;
-
-private:
-  bool saved_;
-};
-
 static duckdb::unique_ptr<duckdb::QueryResult> CreateSPIResult(const duckdb::string &query) {
   elog(DEBUG1, "Creating SPI result for query: %s", query.c_str());
 
-  ForceExecutionGuard force_exec_guard;
   GlobalProcessLockGuard global_lock;
   PostgresScopedStackReset scoped_stack_reset;
-  UnsafeCommandIdGuard command_id_guard;
 
   SPI_connect();
   PushActiveSnapshot(GetTransactionSnapshot());
@@ -311,22 +288,37 @@ static void SubstituteCatalogPlaceholders(duckdb::string &query) {
 static duckdb::unique_ptr<duckdb::QueryResult> CreateSPIExecuteInSubtransaction(const duckdb::string &query) {
   elog(DEBUG1, "CreateSPIExecuteInSubtransaction: %s", query.c_str());
 
-  ForceExecutionGuard force_exec_guard;
   GlobalProcessLockGuard global_lock;
   PostgresScopedStackReset scoped_stack_reset;
-  UnsafeCommandIdGuard command_id_guard;
 
   SPI_connect();
-  PushActiveSnapshot(GetTransactionSnapshot());
 
   MemoryContext old_context = CurrentMemoryContext;
   duckdb::string error_message;
   bool had_error = false;
   int ret = -1;
 
-  pgduckdb::DuckdbAllowSubtransaction(true);
-  BeginInternalSubTransaction(NULL);
-  pgduckdb::DuckdbAllowSubtransaction(false);
+  /*
+   * WORKAROUND: BeginInternalSubTransaction is intentionally NOT used here.
+   *
+   * The full xact + subxact callback infrastructure is now in place
+   * (RegisterXactCallback() in _PG_init installs both DuckLakeXactCallback
+   * and DuckLakeSubXactCallback, and DuckdbAllowSubtransaction toggles the
+   * subxact gate). Even with that machinery matching upstream pg_duckdb,
+   * opening a subtransaction here still triggers PG to raise
+   * "snapshot reference X is not owned by resource owner TopTransaction"
+   * at implicit-autocommit time. The error is sent to the client but never
+   * written to the server log, which makes it look like it comes from
+   * AtEOXact_Snapshot at parent commit -- after our subtxn release returns
+   * cleanly. Tracking down which snapshot is being unregistered against
+   * the wrong owner (and why upstream pg_ducklake doesn't hit it) is a
+   * follow-up that needs PG-internals expertise.
+   *
+   * Cost: DuckLake's FlushChanges no longer retries on unique-violation;
+   * concurrent-commit conflicts surface as top-level INSERT failures
+   * instead of being retried. The regression suite is single-writer so
+   * doesn't exercise this path.
+   */
   PG_TRY();
   {
     ret = SPI_execute(query.c_str(), false, 0);
@@ -339,21 +331,14 @@ static duckdb::unique_ptr<duckdb::QueryResult> CreateSPIExecuteInSubtransaction(
     FreeErrorData(edata);
     FlushErrorState();
     had_error = true;
-    RollbackAndReleaseCurrentSubTransaction();
   }
   PG_END_TRY();
 
-  if (!had_error) {
-    if (ret < 0) {
-      error_message = duckdb::string("SPI execute failed: ") + SPI_result_code_string(ret);
-      had_error = true;
-      RollbackAndReleaseCurrentSubTransaction();
-    } else {
-      ReleaseCurrentSubTransaction();
-    }
+  if (!had_error && ret < 0) {
+    error_message = duckdb::string("SPI execute failed: ") + SPI_result_code_string(ret);
+    had_error = true;
   }
 
-  PopActiveSnapshot();
   SPI_finish();
 
   if (had_error) {

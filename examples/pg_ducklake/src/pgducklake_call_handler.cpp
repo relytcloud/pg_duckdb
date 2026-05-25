@@ -14,7 +14,6 @@
 #include "pgducklake/pgducklake_call_handler.hpp"
 #include "pgducklake/pgducklake_defs.hpp"
 #include "pgducklake/pgducklake_duckdb_query.hpp"
-#include "pgduckdb/pgduckdb_contracts.hpp"
 
 #include <string>
 #include <vector>
@@ -115,15 +114,10 @@ void HandleDuckdbCall(CallStmt *call, const char *query_string) {
 
   elog(DEBUG2, "[PGDuckLake] Executing CALL: %s", query.c_str());
 
-  // The utility hook intercepts CALL before standard_ProcessUtility, so
-  // pg_duckdb's planner hook never fires and the metadata cache may be stale.
-  // Ensure it is valid before calling raw_query, which asserts cache.valid.
+  // ExecuteDuckDBQuery runs in PG planner/executor context (a snapshot is
+  // already set there). The utility hook fires before any planner pass,
+  // though, so push a snapshot for the duration of the call.
   PushActiveSnapshot(GetTransactionSnapshot());
-  if (!pgduckdb::DuckdbEnsureCacheValid()) {
-    PopActiveSnapshot();
-    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("pg_duckdb is not available")));
-  }
-
   const char *error_msg = nullptr;
   int result = ExecuteDuckDBQuery(query.c_str(), &error_msg);
   PopActiveSnapshot();
